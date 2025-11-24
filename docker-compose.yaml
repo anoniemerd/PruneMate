@@ -26,6 +26,8 @@ services:
       - PRUNE_CONTAINERS=true
       # Enable/disable cleanup of unused images
       - PRUNE_IMAGES=true
+      # Remove all unused images (true) or only dangling/untagged images (false)
+      - PRUNE_IMAGES_ALL=true
       # Enable/disable cleanup of unused networks
       - PRUNE_NETWORKS=true
       # Enable/disable cleanup of unused volumes (use with caution!)

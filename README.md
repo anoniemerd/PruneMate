@@ -40,10 +40,13 @@ All configuration is done via environment variables in `docker-compose.yaml`.
 |----------|-------------|---------|
 | `PRUNE_CONTAINERS` | Remove unused containers | `true` |
 | `PRUNE_IMAGES` | Remove unused images | `true` |
+| `PRUNE_IMAGES_ALL` | Remove all unused images (true) or only dangling/untagged (false) | `true` |
 | `PRUNE_NETWORKS` | Remove unused networks | `true` |
 | `PRUNE_VOLUMES` | Remove unused volumes | `false` |
 
 > ⚠️ **Warning**: Be careful with `PRUNE_VOLUMES=true` as this will permanently delete data!
+
+> ℹ️ **Note**: When `PRUNE_IMAGES_ALL=true`, all unused images will be removed, including tagged images not associated with a container. Set to `false` to only remove dangling (untagged) images.
 
 ### Notifications
 

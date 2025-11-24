@@ -6,7 +6,6 @@ PruneMate - Docker image & resource cleanup helper, on a schedule!
 import os
 import sys
 import logging
-from datetime import datetime
 
 import docker
 import pytz
@@ -53,6 +52,7 @@ class PruneMate:
         # Cleanup options
         self.prune_containers = get_env_bool('PRUNE_CONTAINERS', True)
         self.prune_images = get_env_bool('PRUNE_IMAGES', True)
+        self.prune_images_all = get_env_bool('PRUNE_IMAGES_ALL', True)
         self.prune_networks = get_env_bool('PRUNE_NETWORKS', True)
         self.prune_volumes = get_env_bool('PRUNE_VOLUMES', False)
         
@@ -66,6 +66,8 @@ class PruneMate:
         logger.info("PruneMate initialized")
         logger.info(f"  Prune containers: {self.prune_containers}")
         logger.info(f"  Prune images: {self.prune_images}")
+        if self.prune_images:
+            logger.info(f"    Prune all unused images: {self.prune_images_all}")
         logger.info(f"  Prune networks: {self.prune_networks}")
         logger.info(f"  Prune volumes: {self.prune_volumes}")
         logger.info(f"  Notifications enabled: {self.notifications_enabled}")
@@ -103,7 +105,10 @@ class PruneMate:
         
         if self.prune_images:
             try:
-                result = self.client.images.prune(filters={'dangling': False})
+                # When prune_images_all is True, remove all unused images
+                # When False, only remove dangling images (untagged)
+                filters = {'dangling': not self.prune_images_all}
+                result = self.client.images.prune(filters=filters)
                 results['images'] = result
                 deleted_count = len(result.get('ImagesDeleted') or [])
                 space_reclaimed = result.get('SpaceReclaimed', 0)
