@@ -1,0 +1,4 @@
+docker>=7.0.0
+APScheduler>=3.10.0
+pytz>=2024.1
+requests>=2.31.0

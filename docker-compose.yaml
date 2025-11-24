@@ -1,0 +1,45 @@
+services:
+  prunemate:
+    build: .
+    image: prunemate:latest
+    container_name: prunemate
+    restart: unless-stopped
+    volumes:
+      # Required: Mount Docker socket for cleanup operations
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Timezone Configuration
+      - TZ=Europe/Amsterdam
+
+      # Schedule Configuration
+      # Frequency: hourly, daily, weekly, monthly
+      - SCHEDULE_FREQUENCY=daily
+      # Time in HH:MM format (24-hour)
+      - SCHEDULE_TIME=03:00
+      # Day of week for weekly schedule (mon, tue, wed, thu, fri, sat, sun, or * for all)
+      - SCHEDULE_DAY=*
+      # Run cleanup immediately on container startup
+      - RUN_ON_STARTUP=false
+
+      # Cleanup Options
+      # Enable/disable cleanup of unused containers
+      - PRUNE_CONTAINERS=true
+      # Enable/disable cleanup of unused images
+      - PRUNE_IMAGES=true
+      # Enable/disable cleanup of unused networks
+      - PRUNE_NETWORKS=true
+      # Enable/disable cleanup of unused volumes (use with caution!)
+      - PRUNE_VOLUMES=false
+
+      # Notification Settings
+      # Enable ntfy notifications
+      - NOTIFICATIONS_ENABLED=false
+      # Only notify when something was pruned
+      # When disabled, PruneMate sends a notification after every run
+      - NOTIFY_ONLY_WHEN_PRUNED=true
+      # ntfy server URL (e.g., https://ntfy.sh)
+      - NTFY_URL=
+      # ntfy topic name
+      - NTFY_TOPIC=
+      # ntfy authentication token (optional)
+      - NTFY_TOKEN=
