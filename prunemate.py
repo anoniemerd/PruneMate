@@ -54,6 +54,7 @@ DEFAULT_CONFIG = {
         "ntfy": {"enabled": False, "url": "", "topic": "", "token": ""},
         "discord": {"enabled": False, "webhook_url": ""},
         "telegram": {"enabled": False, "bot_token": "", "chat_id": ""},
+        "pushover": {"enabled": False, "user": "", "token": ""},
         "priority": "medium",
         "only_on_changes": True,
     },
@@ -129,7 +130,7 @@ def _redact_for_log(obj):
     if isinstance(obj, dict):
         redacted = {}
         for k, v in obj.items():
-            if k.lower() in {"token", "api_key", "apikey", "password", "secret"}:
+            if k.lower() in {"token", "api_key", "apikey", "password", "secret", "user"}:
                 redacted[k] = "***"
             elif k.lower() == "url" and isinstance(v, str):
                 # Redact username:password in URLs
@@ -477,8 +478,8 @@ def load_config(silent=False):
             if "notifications" not in merged:
                 merged["notifications"] = json.loads(json.dumps(DEFAULT_CONFIG["notifications"]))
             
-            # Ensure all provider subkeys exist (forward compatibility for new providers like telegram)
-            for provider_key in ["gotify", "ntfy", "discord", "telegram"]:
+            # Ensure all provider subkeys exist (forward compatibility for new providers like telegram/pushover)
+            for provider_key in ["gotify", "ntfy", "discord", "telegram", "pushover"]:
                 if provider_key not in merged["notifications"]:
                     merged["notifications"][provider_key] = json.loads(json.dumps(DEFAULT_CONFIG["notifications"][provider_key]))
             
@@ -767,6 +768,68 @@ def _send_telegram(cfg: dict, title: str, message: str, priority: str = "medium"
         return False
 
 
+def _send_pushover(cfg: dict, title: str, message: str, priority: str = "medium") -> bool:
+    """Send a notification via Pushover API."""
+    if not cfg.get("enabled"):
+        log("Pushover disabled; skipping notification.")
+        return False
+    user_key = (cfg.get("user") or "").strip()
+    api_token = (cfg.get("token") or "").strip()
+    if not user_key or not api_token:
+        log("Pushover enabled but user/token missing; skipping.")
+        return False
+
+    # Map priority: low=-1, medium=0, high=1
+    priority_map = {"low": -1, "medium": 0, "high": 1}
+    po_priority = priority_map.get(priority, 0)
+
+    endpoint = "https://api.pushover.net/1/messages.json"
+    form = {
+        "token": api_token,
+        "user": user_key,
+        "message": message,
+        "title": title,
+        "priority": str(po_priority),
+    }
+    data = urllib.parse.urlencode(form).encode("utf-8")
+    req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            raw = resp.read().decode("utf-8", errors="ignore")
+            data = {}
+            try:
+                data = json.loads(raw) if raw else {}
+            except Exception:
+                data = {}
+            status_val = data.get("status")
+            request_id = data.get("request")
+            receipt = data.get("receipt")
+            errors_list = data.get("errors") or []
+            if status_val == 1 and not errors_list:
+                if receipt:
+                    log(f"Pushover notification sent successfully (request={request_id or '?'}, receipt={receipt}).")
+                else:
+                    log(f"Pushover notification sent successfully (request={request_id or '?'}).")
+                return True
+            log(f"Pushover API returned status={status_val} errors={errors_list} (request={request_id or '?'}).")
+            return False
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+            data = json.loads(body)
+            status_val = data.get("status")
+            request_id = data.get("request")
+            errors_list = data.get("errors") or []
+            log(f"Pushover HTTP error {e.code}: status={status_val} errors={errors_list} (request={request_id or '?'}).")
+        except Exception:
+            log(f"Pushover HTTP error {e.code}: {e.reason}. Body: {body[:200] if body else ''}")
+        return False
+    except Exception as e:
+        log(f"Failed to send Pushover notification: {e}")
+        return False
+
+
 def send_notification(title: str, message: str, priority: str = "medium") -> bool:
     """Send a notification using the configured provider (gotify, ntfy, discord, or telegram)."""
     notcfg = config.get("notifications", DEFAULT_CONFIG["notifications"])
@@ -779,6 +842,8 @@ def send_notification(title: str, message: str, priority: str = "medium") -> boo
         return _send_discord(notcfg.get("discord", {}), title, message, priority)
     if provider == "telegram":
         return _send_telegram(notcfg.get("telegram", {}), title, message, priority)
+    if provider == "pushover":
+        return _send_pushover(notcfg.get("pushover", {}), title, message, priority)
     log(f"Unknown notification provider '{provider}'; skipping.")
     return False
 
@@ -1522,6 +1587,9 @@ def update():
     telegram_enabled = "telegram_enabled" in request.form
     telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
     telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
+    pushover_enabled = "pushover_enabled" in request.form
+    pushover_user = (request.form.get("pushover_user") or "").strip()
+    pushover_token = (request.form.get("pushover_token") or "").strip()
     # Parse notification priority (low/medium/high, default 'medium')
     notification_priority = request.form.get("notification_priority", "medium").strip().lower()
     if notification_priority not in ["low", "medium", "high"]:
@@ -1537,6 +1605,8 @@ def update():
         discord_enabled = True
     if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
         telegram_enabled = True
+    if provider == "pushover" and not pushover_enabled and pushover_user and pushover_token:
+        pushover_enabled = True
 
     time_value = validate_time(time_value)
 
@@ -1556,6 +1626,7 @@ def update():
             "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
             "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
             "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
+            "pushover": {"enabled": pushover_enabled, "user": pushover_user, "token": pushover_token},
             "priority": notification_priority,
             "only_on_changes": only_on_changes,
         },
@@ -1698,6 +1769,9 @@ def test_notification():
     telegram_enabled = "telegram_enabled" in request.form
     telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
     telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
+    pushover_enabled = "pushover_enabled" in request.form
+    pushover_user = (request.form.get("pushover_user") or "").strip()
+    pushover_token = (request.form.get("pushover_token") or "").strip()
     # Parse notification priority (low/medium/high, default 'medium')
     notification_priority = request.form.get("notification_priority", "medium").strip().lower()
     if notification_priority not in ["low", "medium", "high"]:
@@ -1713,6 +1787,8 @@ def test_notification():
         discord_enabled = True
     if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
         telegram_enabled = True
+    if provider == "pushover" and not pushover_enabled and pushover_user and pushover_token:
+        pushover_enabled = True
 
     time_value = validate_time(time_value)
 
@@ -1732,6 +1808,7 @@ def test_notification():
             "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
             "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
             "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
+            "pushover": {"enabled": pushover_enabled, "user": pushover_user, "token": pushover_token},
             "priority": notification_priority,
             "only_on_changes": only_on_changes,
         },

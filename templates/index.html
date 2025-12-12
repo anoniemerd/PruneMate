@@ -616,6 +616,7 @@
                 <option value="ntfy" {% if config.notifications.provider == 'ntfy' %}selected{% endif %}>ntfy</option>
                 <option value="discord" {% if config.notifications.provider == 'discord' %}selected{% endif %}>Discord</option>
                 <option value="telegram" {% if config.notifications.provider == 'telegram' %}selected{% endif %}>Telegram</option>
+                <option value="pushover" {% if config.notifications.provider == 'pushover' %}selected{% endif %}>Pushover</option>
               </select>
             </div>
             <!-- Notification priority selector -->
@@ -753,6 +754,34 @@
                 <input type="text" id="telegram_chat_id" name="telegram_chat_id"
                        value="{{ config.notifications.telegram.chat_id or '' }}"
                        placeholder="123456789 or @channelname" aria-label="Telegram chat ID or channel username">
+              </div>
+            </div>
+          </div>
+
+          <!-- Pushover specific fields -->
+          <div id="pushover-fields" style="margin-top:12px;display:none;">
+            <div class="toggle-row">
+              <span class="label-text" id="pushover-enable-label">Enable Pushover notifications</span>
+              <label class="switch">
+                <input type="checkbox" name="pushover_enabled" id="pushover_enabled" aria-labelledby="pushover-enable-label"
+                       {% if config.notifications.pushover.enabled %}checked{% endif %}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <div style="flex:1;">
+                <label for="pushover_user">User Key :</label>
+                <input type="password" id="pushover_user" name="pushover_user" autocomplete="off"
+                       value="{{ config.notifications.pushover.user or '' }}"
+                       placeholder="uQiRzpo4DXghDmr9QzzfQu27cmVRsG" aria-label="Pushover user key">
+              </div>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <div style="flex:1;">
+                <label for="pushover_token">API Token :</label>
+                <input type="password" id="pushover_token" name="pushover_token" autocomplete="off"
+                       value="{{ config.notifications.pushover.token or '' }}"
+                       placeholder="azGDORePK8gMaC0QOYAMyEEuzJnyUi" aria-label="Pushover application token">
               </div>
             </div>
           </div>
@@ -985,14 +1014,16 @@
       const ntfyBlock = document.getElementById('ntfy-fields');
       const discordBlock = document.getElementById('discord-fields');
       const telegramBlock = document.getElementById('telegram-fields');
+      const pushoverBlock = document.getElementById('pushover-fields');
       const toggleWrapper = document.getElementById('only-on-changes-wrapper');
-      if(!gotifyBlock || !ntfyBlock || !discordBlock || !telegramBlock || !toggleWrapper) return;
+      if(!gotifyBlock || !ntfyBlock || !discordBlock || !telegramBlock || !pushoverBlock || !toggleWrapper) return;
       // Show Gotify fields and position toggle
       if(prov === 'gotify'){
         gotifyBlock.style.display = 'block';
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'none';
+        pushoverBlock.style.display = 'none';
         if(gotifyBlock.firstElementChild){
           gotifyBlock.insertBefore(toggleWrapper, gotifyBlock.firstElementChild.nextSibling);
         } else {
@@ -1004,6 +1035,7 @@
         ntfyBlock.style.display = 'block';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'none';
+        pushoverBlock.style.display = 'none';
         if(ntfyBlock.firstElementChild){
           ntfyBlock.insertBefore(toggleWrapper, ntfyBlock.firstElementChild.nextSibling);
         } else {
@@ -1015,6 +1047,7 @@
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'block';
         telegramBlock.style.display = 'none';
+        pushoverBlock.style.display = 'none';
         if(discordBlock.firstElementChild){
           discordBlock.insertBefore(toggleWrapper, discordBlock.firstElementChild.nextSibling);
         } else {
@@ -1026,10 +1059,23 @@
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'block';
+        pushoverBlock.style.display = 'none';
         if(telegramBlock.firstElementChild){
           telegramBlock.insertBefore(toggleWrapper, telegramBlock.firstElementChild.nextSibling);
         } else {
           telegramBlock.appendChild(toggleWrapper);
+        }
+      // Show Pushover fields and position toggle
+      } else if(prov === 'pushover'){
+        gotifyBlock.style.display = 'none';
+        ntfyBlock.style.display = 'none';
+        discordBlock.style.display = 'none';
+        telegramBlock.style.display = 'none';
+        pushoverBlock.style.display = 'block';
+        if(pushoverBlock.firstElementChild){
+          pushoverBlock.insertBefore(toggleWrapper, pushoverBlock.firstElementChild.nextSibling);
+        } else {
+          pushoverBlock.appendChild(toggleWrapper);
         }
       }
     }
