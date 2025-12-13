@@ -831,7 +831,7 @@ def _send_pushover(cfg: dict, title: str, message: str, priority: str = "medium"
 
 
 def send_notification(title: str, message: str, priority: str = "medium") -> bool:
-    """Send a notification using the configured provider (gotify, ntfy, discord, or telegram)."""
+    """Send a notification using the configured provider (gotify, ntfy, discord, telegram, or pushover)."""
     notcfg = config.get("notifications", DEFAULT_CONFIG["notifications"])
     provider = (notcfg.get("provider") or "gotify").lower()
     if provider == "gotify":
