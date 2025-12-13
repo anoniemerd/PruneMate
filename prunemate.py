@@ -792,7 +792,15 @@ def _send_pushover(cfg: dict, title: str, message: str, priority: str = "medium"
         "priority": str(po_priority),
     }
     data = urllib.parse.urlencode(form).encode("utf-8")
-    req = urllib.request.Request(endpoint, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, method="POST")
+    req = urllib.request.Request(
+        endpoint,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "User-Agent": "PruneMate/1.2.9 (Docker cleanup bot)"
+        },
+        method="POST"
+    )
     try:
         with urllib.request.urlopen(req, timeout=10) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
