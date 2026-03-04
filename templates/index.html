@@ -1662,11 +1662,17 @@
             if (host.containers && host.containers.length > 0) {
               html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">🗑️ Containers (' + host.containers.length + '):</strong>';
               html += '<div style="margin-top: 6px; max-height: 120px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
+              var containerId = 'containers-' + host.name.replace(/[^a-zA-Z0-9]/g, '_');
               host.containers.slice(0, 10).forEach(c => {
                 html += '<div style="padding: 4px 0;">• ' + (c.name || c.id) + ' <span style="color: #6b7280;">(' + c.status + ')</span></div>';
               });
               if (host.containers.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.containers.length - 10) + ' more</div>';
+                html += '<div id="' + containerId + '-extra" style="display:none;">';
+                host.containers.slice(10).forEach(c => {
+                  html += '<div style="padding: 4px 0;">• ' + (c.name || c.id) + ' <span style="color: #6b7280;">(' + c.status + ')</span></div>';
+                });
+                html += '</div>';
+                html += '<div style="padding: 4px 0;"><a href="#" style="color: var(--accent); font-style: italic; text-decoration: none; cursor: pointer;" onclick="event.preventDefault(); var el=document.getElementById(\'' + containerId + '-extra\'); el.style.display=el.style.display===\'none\'?\'block\':\'none\'; this.textContent=el.style.display===\'none\'? \'... and ' + (host.containers.length - 10) + ' more\' : \'▲ show less\';">... and ' + (host.containers.length - 10) + ' more</a></div>';
               }
               html += '</div></div>';
             }
@@ -1675,12 +1681,19 @@
             if (host.images && host.images.length > 0) {
               html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">💿 Images (' + host.images.length + '):</strong>';
               html += '<div style="margin-top: 6px; max-height: 120px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
+              var imagesId = 'images-' + host.name.replace(/[^a-zA-Z0-9]/g, '_');
               host.images.slice(0, 10).forEach(img => {
                 const tags = img.tags.join(', ') || img.id;
                 html += '<div style="padding: 4px 0;">• ' + tags + ' <span style="color: #6b7280;">(' + img.size + ')</span></div>';
               });
               if (host.images.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.images.length - 10) + ' more</div>';
+                html += '<div id="' + imagesId + '-extra" style="display:none;">';
+                host.images.slice(10).forEach(img => {
+                  const tags = img.tags.join(', ') || img.id;
+                  html += '<div style="padding: 4px 0;">• ' + tags + ' <span style="color: #6b7280;">(' + img.size + ')</span></div>';
+                });
+                html += '</div>';
+                html += '<div style="padding: 4px 0;"><a href="#" style="color: var(--accent); font-style: italic; text-decoration: none; cursor: pointer;" onclick="event.preventDefault(); var el=document.getElementById(\'' + imagesId + '-extra\'); el.style.display=el.style.display===\'none\'?\'block\':\'none\'; this.textContent=el.style.display===\'none\'? \'... and ' + (host.images.length - 10) + ' more\' : \'▲ show less\';">... and ' + (host.images.length - 10) + ' more</a></div>';
               }
               html += '</div></div>';
             }
@@ -1709,11 +1722,17 @@
             if (host.build_cache && host.build_cache.length > 0) {
               html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">🏗️ Build Cache (' + host.build_cache.length + '):</strong>';
               html += '<div style="margin-top: 6px; max-height: 100px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
+              var cacheId = 'cache-' + host.name.replace(/[^a-zA-Z0-9]/g, '_');
               host.build_cache.slice(0, 10).forEach(cache => {
                 html += '<div style="padding: 4px 0;">• ' + cache.id + ' (' + cache.type + ', ' + cache.size + ')</div>';
               });
               if (host.build_cache.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.build_cache.length - 10) + ' more</div>';
+                html += '<div id="' + cacheId + '-extra" style="display:none;">';
+                host.build_cache.slice(10).forEach(cache => {
+                  html += '<div style="padding: 4px 0;">• ' + cache.id + ' (' + cache.type + ', ' + cache.size + ')</div>';
+                });
+                html += '</div>';
+                html += '<div style="padding: 4px 0;"><a href="#" style="color: var(--accent); font-style: italic; text-decoration: none; cursor: pointer;" onclick="event.preventDefault(); var el=document.getElementById(\'' + cacheId + '-extra\'); el.style.display=el.style.display===\'none\'?\'block\':\'none\'; this.textContent=el.style.display===\'none\'? \'... and ' + (host.build_cache.length - 10) + ' more\' : \'▲ show less\';">... and ' + (host.build_cache.length - 10) + ' more</a></div>';
               }
               html += '</div></div>';
             }
