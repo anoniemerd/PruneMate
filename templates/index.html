@@ -717,6 +717,7 @@
                 <option value="ntfy" {% if config.notifications.provider == 'ntfy' %}selected{% endif %}>ntfy</option>
                 <option value="discord" {% if config.notifications.provider == 'discord' %}selected{% endif %}>Discord</option>
                 <option value="telegram" {% if config.notifications.provider == 'telegram' %}selected{% endif %}>Telegram</option>
+                <option value="slack" {% if config.notifications.provider == 'slack' %}selected{% endif %}>Slack</option>
               </select>
             </div>
             <!-- Notification priority selector -->
@@ -854,6 +855,26 @@
                 <input type="text" id="telegram_chat_id" name="telegram_chat_id"
                        value="{{ config.notifications.telegram.chat_id or '' }}"
                        placeholder="123456789 or @channelname" aria-label="Telegram chat ID or channel username">
+              </div>
+            </div>
+          </div>
+
+          <!-- Slack specific fields -->
+          <div id="slack-fields" style="margin-top:12px;display:none;">
+            <div class="toggle-row">
+              <span class="label-text" id="slack-enable-label">Enable Slack notifications</span>
+              <label class="switch">
+                <input type="checkbox" name="slack_enabled" id="slack_enabled" aria-labelledby="slack-enable-label"
+                       {% if config.notifications.slack.enabled %}checked{% endif %}>
+                <span class="slider"></span>
+              </label>
+            </div>
+            <div class="row" style="margin-top:6px;">
+              <div style="flex:1;">
+                <label for="slack_webhook_url">Slack Webhook URL :</label>
+                <input type="text" id="slack_webhook_url" name="slack_webhook_url"
+                       value="{{ config.notifications.slack.webhook_url or '' }}"
+                       placeholder="https://hooks.slack.com/services/..." aria-label="Slack incoming webhook URL">
               </div>
             </div>
           </div>
@@ -1087,14 +1108,16 @@
       const ntfyBlock = document.getElementById('ntfy-fields');
       const discordBlock = document.getElementById('discord-fields');
       const telegramBlock = document.getElementById('telegram-fields');
+      const slackBlock = document.getElementById('slack-fields');
       const toggleWrapper = document.getElementById('only-on-changes-wrapper');
-      if(!gotifyBlock || !ntfyBlock || !discordBlock || !telegramBlock || !toggleWrapper) return;
+      if(!gotifyBlock || !ntfyBlock || !discordBlock || !telegramBlock || !slackBlock || !toggleWrapper) return;
       // Show Gotify fields and position toggle
       if(prov === 'gotify'){
         gotifyBlock.style.display = 'block';
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'none';
+        slackBlock.style.display = 'none';
         if(gotifyBlock.firstElementChild){
           gotifyBlock.insertBefore(toggleWrapper, gotifyBlock.firstElementChild.nextSibling);
         } else {
@@ -1106,6 +1129,7 @@
         ntfyBlock.style.display = 'block';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'none';
+        slackBlock.style.display = 'none';
         if(ntfyBlock.firstElementChild){
           ntfyBlock.insertBefore(toggleWrapper, ntfyBlock.firstElementChild.nextSibling);
         } else {
@@ -1117,6 +1141,7 @@
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'block';
         telegramBlock.style.display = 'none';
+        slackBlock.style.display = 'none';
         if(discordBlock.firstElementChild){
           discordBlock.insertBefore(toggleWrapper, discordBlock.firstElementChild.nextSibling);
         } else {
@@ -1128,10 +1153,23 @@
         ntfyBlock.style.display = 'none';
         discordBlock.style.display = 'none';
         telegramBlock.style.display = 'block';
+        slackBlock.style.display = 'none';
         if(telegramBlock.firstElementChild){
           telegramBlock.insertBefore(toggleWrapper, telegramBlock.firstElementChild.nextSibling);
         } else {
           telegramBlock.appendChild(toggleWrapper);
+        }
+      // Show Slack fields and position toggle
+      } else if(prov === 'slack'){
+        gotifyBlock.style.display = 'none';
+        ntfyBlock.style.display = 'none';
+        discordBlock.style.display = 'none';
+        telegramBlock.style.display = 'none';
+        slackBlock.style.display = 'block';
+        if(slackBlock.firstElementChild){
+          slackBlock.insertBefore(toggleWrapper, slackBlock.firstElementChild.nextSibling);
+        } else {
+          slackBlock.appendChild(toggleWrapper);
         }
       }
     }
