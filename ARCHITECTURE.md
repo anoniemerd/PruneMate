@@ -57,7 +57,7 @@ flowchart TD
     
     Stats --> Notify{Notifications<br/>enabled?}
     
-    Notify --> |Yes + Changes| Send[Send Notification<br/>Gotify/ntfy/Discord/Telegram<br/>Per-host breakdown]
+    Notify --> |Yes + Changes| Send[Send Notification<br/>Gotify/ntfy/Discord/Telegram/Slack<br/>Per-host breakdown]
     Notify --> |No or No changes| Log[Write to<br/>prunemate.log]
     Send --> Log
     Log --> Done[Done]
@@ -115,17 +115,19 @@ flowchart TD
 
 ### Notification Flow
 
-- **Providers**: Gotify (self-hosted), ntfy.sh (pub-sub), Discord (webhooks), or Telegram (Bot API)
+- **Providers**: Gotify (self-hosted), ntfy.sh (pub-sub), Discord (webhooks), Telegram (Bot API), or Slack (Incoming Webhooks)
 - **Authentication**: 
   - Gotify: App tokens
   - ntfy: Bearer tokens, Basic Auth, or unauthenticated
   - Discord: Webhook URLs
   - Telegram: Bot Token + Chat ID
+  - Slack: Incoming Webhook URLs
 - **Priority System**: Text-based (Low/Medium/High) with provider-specific behavior
   - Gotify: Numeric mapping (Low=2, Medium=5, High=8)
   - ntfy: Numeric mapping (Low=2, Medium=3, High=5)
   - Discord: Color mapping (Low=Green, Medium=Orange, High=Red)
   - Telegram: Notification sound (Low=Silent, Medium/High=Sound)
+  - Slack: Color mapping (Low=good/green, Medium=warning/orange, High=danger/red)
 - **Smart Notifications**: Optional "only on changes" mode to reduce noise
 - **Per-host Breakdown**: Detailed results for each Docker host in multi-host setups
 
