@@ -74,7 +74,7 @@ Add external Docker hosts via [docker-socket-proxy](https://github.com/Tecnativa
 </p>
 
 ### Notification Settings
-Set up notifications via Gotify, ntfy.sh, Discord, or Telegram to stay informed about cleanup results.
+Set up notifications via Gotify, ntfy.sh, Discord, Telegram, or Slack to stay informed about cleanup results.
 
 <p align="center">
   <img width="400" height="400" alt="prunemate-notifications" src="https://github.com/user-attachments/assets/73a06c4d-fffa-40eb-a010-239d7d364004" /> 
@@ -261,8 +261,8 @@ Access the web interface at `http://localhost:7676/` (or your server IP) to conf
 - ☑️ All unused volumes
 
 **Notification Settings:**
-- **Provider:** Gotify, ntfy.sh, Discord, or Telegram
-- **Configuration:** Provider-specific credentials (URL/Token for Gotify, URL/Topic for ntfy, Webhook URL for Discord, Bot Token/Chat ID for Telegram)
+- **Provider:** Gotify, ntfy.sh, Discord, Telegram, or Slack
+- **Configuration:** Provider-specific credentials (URL/Token for Gotify, URL/Topic for ntfy, Webhook URL for Discord, Bot Token/Chat ID for Telegram, Webhook URL for Slack)
 - **Priority:** Low (silent), Medium, or High priority notifications (provider-dependent)
 - **Only notify on changes:** Only send notifications when something was actually cleaned
 
@@ -397,6 +397,26 @@ PruneMate tracks cumulative statistics across all prune runs:
 **Advanced usage:**
 - **Groups:** Add bot to group, get group Chat ID (starts with `-`)
 - **Channels:** Use channel username with `@` (e.g., `@mychannel`) or numeric ID
+
+---
+
+### Slack
+
+[Slack Incoming Webhooks](https://api.slack.com/messaging/webhooks) allow notifications directly to a Slack channel.
+
+**Setup:**
+1. Go to [api.slack.com/apps](https://api.slack.com/apps) and create (or choose) an app
+2. Enable **Incoming Webhooks** in the app's feature settings
+3. Click **Add New Webhook to Workspace**, select your target channel, and click **Allow**
+4. Copy the generated webhook URL (starts with `https://hooks.slack.com/services/…`)
+5. In PruneMate notifications settings:
+   - **Provider:** Slack
+   - **Webhook URL:** The URL you copied above
+
+**Priority behavior:**
+- **Low:** Green attachment border (`good`)
+- **Medium:** Orange/yellow attachment border (`warning`)
+- **High:** Red attachment border (`danger`)
 
 ---
 
