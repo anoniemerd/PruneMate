@@ -56,7 +56,7 @@ A sleek, lightweight web interface to **automatically clean up Docker resources*
 The overall look and feel of the PruneMate dashboard
 
 <p align="center">
-  <img width="400" height="800" src="https://github.com/user-attachments/assets/845405f1-0787-4323-a592-36177e32a035" />
+  <img width="1246" height="1759" alt="afbeelding" src="https://github.com/user-attachments/assets/8afaf51c-0414-4bf1-8851-24f5bfded94a" />
 </p>
 
 ### Authentication page
@@ -551,7 +551,7 @@ The `/api/stats` endpoint returns the following fields:
 
 ## 📜 Release Notes
 
-## [V1.4.0] - Novemeber 2026
+## [V1.4.0] - November 2026
 
 ### Added
 - 💓 **Health ping for external hosts** - External Docker hosts are now pinged to check their health
