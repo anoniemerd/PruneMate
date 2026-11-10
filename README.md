@@ -84,7 +84,7 @@ Set up notifications via Gotify, ntfy.sh, Discord, or Telegram to stay informed 
 A brief interface that shows which Docker resources will be pruned during the next cleanup run, either manually triggered or scheduled.
 
 <p align="center">
-  <img width="1400" height="1000" alt="prunemate-preview" src="https://github.com/user-attachments/assets/34fb445d-8956-46e8-84df-b6718db3f556" /> 
+  <img width="1380" height="974" alt="afbeelding" src="https://github.com/user-attachments/assets/f752d64b-5f9d-4355-b7e4-a9fb3579adf9" />
 </p>
 
 
