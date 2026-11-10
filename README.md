@@ -456,7 +456,7 @@ Click **Run now** and check logs for successful connection to all hosts.
 PruneMate provides a custom API endpoint at `/api/stats` that returns all-time statistics in a format compatible with [Homepage](https://gethomepage.dev/) dashboard widgets.
 
 <p align="center">
-  <img width="400" height="400" alt="prunemate-homepage" src="https://github.com/user-attachments/assets/942169f6-bc16-4cef-8b46-3ac012fe7fec" /> 
+  <img width="658" height="212" alt="afbeelding" src="https://github.com/user-attachments/assets/ae27323a-53d1-4ef3-acfc-a363b7f854de" />
 </p>
 
 ### Setup
