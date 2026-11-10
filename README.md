@@ -551,10 +551,21 @@ The `/api/stats` endpoint returns the following fields:
 
 ## 📜 Release Notes
 
-## [V1.3.3] - Ferbruary 2026
+## [V1.4.0] - Novemeber 2026
 
-### Changed  
-- 🏗️ **New info button** -  A new information button has been added to the newly launched Prunemate.org website.
+### Added
+- 💓 **Health ping for external hosts** - External Docker hosts are now pinged to check their health
+  - Status symbol changes color based on the result of the health check for External Docker hosts
+    - Green = online, red = offline, grey = disabled, amber = checking or status unavailable
+  - New `/hosts/status` endpoint checks all enabled external hosts in parallel; statuses refresh every 60 seconds
+  - Docker connections to remote hosts are now verified with a ping and a 5 second connect timeout, so unreachable hosts wil not run the scheduled prune run
+
+### Changed
+- 🔔 **Shorter, cleaner notifications** - Notifications are more compact and less cluttered
+  - Removed emojis from notification text for a cleaner look across all providers
+  - Per-host results only list the items that were actually pruned
+  - Totals across all hosts are skipped when only one host had deletions, avoiding duplicate information
+- 🎨 **Improved icons** - Updated icons for external hosts and notifications in the PruneMate interface
 
 📖 **[View full changelog](CHANGELOG.md)**
 
