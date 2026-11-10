@@ -494,7 +494,7 @@
 
           <!-- Time picker (24h or 12h format based on config) -->
           <div class="field">
-            <label for="time">Time</label><br />
+            <label for="time"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="vertical-align:-3px;margin-right:5px;"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>Time</label><br />
             {% if use_24h %}
             <!-- Native 24-hour time picker -->
             <input
@@ -637,16 +637,11 @@
         <button type="button" id="hosts-header" aria-expanded="false" aria-controls="hosts-panel"
           style="all:unset;display:flex;width:100%;cursor:pointer;align-items:center;justify-content:space-between;padding:4px 0 8px 0;">
           <div style="display:flex;align-items:center;gap:10px;">
-            <!-- Docker/Server icon (simple style matching notifications) -->
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-              <!-- Server/container stack -->
-              <rect x="2" y="3" width="20" height="5" rx="1" fill="none" stroke="#9ca3af" stroke-width="1.5"></rect>
-              <rect x="2" y="10" width="20" height="5" rx="1" fill="none" stroke="#9ca3af" stroke-width="1.5"></rect>
-              <rect x="2" y="17" width="20" height="4" rx="1" fill="none" stroke="#9ca3af" stroke-width="1.5"></rect>
-              <!-- Status dots -->
-              <circle cx="5" cy="5.5" r="0.8" fill="#9ca3af"></circle>
-              <circle cx="5" cy="12.5" r="0.8" fill="#9ca3af"></circle>
-              <circle cx="5" cy="19" r="0.8" fill="#9ca3af"></circle>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="flex-shrink:0;">
+              <rect width="20" height="8" x="2" y="2" rx="2"></rect>
+              <rect width="20" height="8" x="2" y="14" rx="2"></rect>
+              <line x1="6" x2="6.01" y1="6" y2="6"></line>
+              <line x1="6" x2="6.01" y1="18" y2="18"></line>
             </svg>
             <div>
               <strong>External Docker hosts</strong>
@@ -693,10 +688,9 @@
         <button type="button" id="notif-header" aria-expanded="false" aria-controls="notif-panel"
           style="all:unset;display:flex;width:100%;cursor:pointer;align-items:center;justify-content:space-between;padding:4px 0 8px 0;">
           <div style="display:flex;align-items:center;gap:10px;">
-            <!-- Notification bell icon -->
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true" focusable="false">
-              <path d="M15 17H9a3 3 0 0 0 6 0z" fill="#9ca3af"></path>
-              <path d="M12 3a5 5 0 0 0-5 5v2.2a5 5 0 0 1-.9 2.8L5 15h14l-1.1-1.0a5 5 0 0 1-.9-2.8V8a5 5 0 0 0-5-5z" fill="#9ca3af"></path>
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="flex-shrink:0;">
+              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
+              <path d="M10 21h4"></path>
             </svg>
             <div>
               <strong>Notification settings</strong>
@@ -894,7 +888,7 @@
 
     <!-- Application footer -->
     <div class="footer">
-      PruneMate · 2026 · V1.3.3 · 
+      PruneMate · 2026 · V1.4.0 · 
       <a href="https://github.com/anoniemerd/PruneMate" target="_blank">GitHub</a> ·
       <a href="https://prunemate.org" target="_blank">Prunemate.org</a>
     </div>
@@ -1243,6 +1237,48 @@
         });
     }
 
+    let hostStatusCheckInProgress = false;
+
+    function refreshHostStatuses(){
+      const statusDots = Array.from(document.querySelectorAll('#hosts-list .host-status-dot'));
+      if (!statusDots.length || hostStatusCheckInProgress) return;
+
+      hostStatusCheckInProgress = true;
+      const dotsByIndex = new Map(statusDots.map(dot => [Number(dot.dataset.hostIndex), dot]));
+
+      fetch('/hosts/status')
+        .then(response => {
+          if (!response.ok) throw new Error('Failed to check Docker hosts');
+          return response.json();
+        })
+        .then(data => {
+          const statusStyles = {
+            online: { color: '#22c55e', title: 'Online' },
+            offline: { color: '#ef4444', title: 'Offline: Docker ping failed' },
+            disabled: { color: '#6b7280', title: 'Disabled' }
+          };
+
+          (data.statuses || []).forEach(hostStatus => {
+            const dot = dotsByIndex.get(hostStatus.index);
+            const style = statusStyles[hostStatus.status];
+            if (!dot || !dot.isConnected || !style) return;
+            dot.style.backgroundColor = style.color;
+            dot.title = style.title;
+          });
+        })
+        .catch(() => {
+          statusDots.forEach(dot => {
+            if (dot.isConnected && dot.dataset.enabled === 'true') {
+              dot.style.backgroundColor = '#f59e0b';
+              dot.title = 'Status unavailable';
+            }
+          });
+        })
+        .finally(() => {
+          hostStatusCheckInProgress = false;
+        });
+    }
+
     // Load and display Docker hosts
     function loadHosts(){
       const hostsList = document.getElementById('hosts-list');
@@ -1271,8 +1307,11 @@
             
             // Host status indicator
             const statusDot = document.createElement('div');
-            statusDot.style.cssText = `width:10px;height:10px;border-radius:50%;flex-shrink:0;background:${host.enabled ? '#22c55e' : '#6b7280'};`;
-            statusDot.title = host.enabled ? 'Enabled' : 'Disabled';
+            statusDot.className = 'host-status-dot';
+            statusDot.dataset.hostIndex = String(originalIndex);
+            statusDot.dataset.enabled = String(Boolean(host.enabled));
+            statusDot.style.cssText = `width:10px;height:10px;border-radius:50%;flex-shrink:0;background:${host.enabled ? '#f59e0b' : '#6b7280'};`;
+            statusDot.title = host.enabled ? 'Checking Docker connection...' : 'Disabled';
             
             // Host info
             const infoDiv = document.createElement('div');
@@ -1333,6 +1372,8 @@
             
             hostsList.appendChild(hostDiv);
           });
+
+          refreshHostStatuses();
         })
         .catch(err => {
           console.error('Error loading hosts:', err);
@@ -1496,6 +1537,7 @@
       
       // Load Docker hosts
       loadHosts();
+      setInterval(refreshHostStatuses, 60000);
       
       {% if not use_24h %}
       // Setup 12-hour time picker with AM/PM

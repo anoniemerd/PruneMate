@@ -2,6 +2,22 @@
 
 All notable changes to PruneMate will be documented in this file.
 
+## [V1.4.0] - November 2026
+
+### Added
+- 💓 **Health ping for external hosts** - External Docker hosts are now pinged to check their health
+  - Status symbol changes color based on the result of the health check for External Docker hosts
+    - Green = online, red = offline, grey = disabled, amber = checking or status unavailable
+  - New `/hosts/status` endpoint checks all enabled external hosts in parallel; statuses refresh every 60 seconds
+  - Docker connections to remote hosts are now verified with a ping and a 5 second connect timeout, so unreachable hosts wil not run the scheduled prune run
+
+### Changed
+- 🔔 **Shorter, cleaner notifications** - Notifications are more compact and less cluttered
+  - Removed emojis from notification text for a cleaner look across all providers
+  - Per-host results only list the items that were actually pruned
+  - Totals across all hosts are skipped when only one host had deletions, avoiding duplicate information
+- 🎨 **Improved icons** - Updated icons for external hosts and notifications in the PruneMate interface
+
 ## [V1.3.3] - February 2026
 
 ### Changed  

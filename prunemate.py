@@ -8,6 +8,7 @@ import calendar
 import base64
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -817,7 +818,15 @@ def create_docker_client(host_url: str):
         if host_url.startswith("unix://"):
             return docker.DockerClient(base_url=host_url)
         elif host_url.startswith("tcp://") or host_url.startswith("http://") or host_url.startswith("https://"):
-            return docker.DockerClient(base_url=host_url)
+            client = docker.DockerClient(base_url=host_url, timeout=5)
+            try:
+                if not client.ping():
+                    raise ConnectionError("Docker host did not respond to ping")
+            except Exception:
+                client.close()
+                raise
+            client.api.timeout = 60
+            return client
         else:
             # Fallback: try as-is
             return docker.DockerClient(base_url=host_url)
@@ -1309,58 +1318,64 @@ def run_prune_job(origin: str = "unknown", wait: bool = False) -> bool:
 
         # Build notification summary with per-host breakdown
         summary_lines = [
-            f"📅 {describe_schedule()}",
+            f"Schedule: {describe_schedule()}",
             "",
         ]
         
         # Add per-host details
         if len(all_hosts) > 1:
-            summary_lines.append("📊 Per-host results:")
+            summary_lines.append("Results by host")
+
+        hosts_with_deletions = sum(
+            1 for result in host_results
+            if result.get("success") and any(
+                result.get(key)
+                for key in ("containers", "images", "networks", "volumes", "build_cache")
+            )
+        )
         
         for result in host_results:
             if result.get("success"):
                 has_deletions = any([result.get('containers'), result.get('images'), result.get('networks'), result.get('volumes'), result.get('build_cache')])
                 
                 if has_deletions:
-                    summary_lines.append(f"• {result['name']}")
+                    summary_lines.append(result['name'])
                     if result.get('containers'):
-                        summary_lines.append(f"  - 🗑️ {result['containers']} containers")
+                        summary_lines.append(f"  - Containers: {result['containers']}")
                     if result.get('images'):
-                        summary_lines.append(f"  - 💿 {result['images']} images")
+                        summary_lines.append(f"  - Images: {result['images']}")
                     if result.get('networks'):
-                        summary_lines.append(f"  - 🌐 {result['networks']} networks")
+                        summary_lines.append(f"  - Networks: {result['networks']}")
                     if result.get('volumes'):
-                        summary_lines.append(f"  - 📦 {result['volumes']} volumes")
+                        summary_lines.append(f"  - Volumes: {result['volumes']}")
                     if result.get('build_cache'):
-                        summary_lines.append(f"  - 🏗️ {result['build_cache']} build caches")
+                        summary_lines.append(f"  - Build caches: {result['build_cache']}")
                     if result['space']:
-                        summary_lines.append(f"  - 💾 {human_bytes(result['space'])} reclaimed")
+                        summary_lines.append(f"  - Space reclaimed: {human_bytes(result['space'])}")
                 else:
-                    summary_lines.append(f"• {result['name']}: ✅ Nothing to prune")
+                    summary_lines.append(f"{result['name']}: Nothing to prune")
             else:
-                summary_lines.append(f"• {result['name']}: ❌ {result.get('error', 'Unknown error')}")
+                summary_lines.append(f"{result['name']}: Error - {result.get('error', 'Unknown error')}")
         
-        if len(all_hosts) > 1:
+        if len(all_hosts) > 1 and hosts_with_deletions != 1:
             summary_lines.append("")
-        
-        # Add totals
-        if len(all_hosts) > 1:
-            summary_lines.append("📈 Total across all hosts:")
-        if anything_deleted:
-            if total_containers_deleted:
-                summary_lines.append(f"  - 🗑️ Containers: {total_containers_deleted}")
-            if total_images_deleted:
-                summary_lines.append(f"  - 💿 Images: {total_images_deleted}")
-            if total_networks_deleted:
-                summary_lines.append(f"  - 🌐 Networks: {total_networks_deleted}")
-            if total_volumes_deleted:
-                summary_lines.append(f"  - 📦 Volumes: {total_volumes_deleted}")
-            if total_build_cache_deleted:
-                summary_lines.append(f"  - 🏗️ Build caches: {total_build_cache_deleted}")
-            if total_space_reclaimed:
-                summary_lines.append(f"  - 💾 Space reclaimed: {human_bytes(total_space_reclaimed)}")
-        else:
-            summary_lines.append("✅ Nothing to prune this run")
+            # Add totals across hosts
+            summary_lines.append("Totals across all hosts")
+            if anything_deleted:
+                if total_containers_deleted:
+                    summary_lines.append(f"  - Containers: {total_containers_deleted}")
+                if total_images_deleted:
+                    summary_lines.append(f"  - Images: {total_images_deleted}")
+                if total_networks_deleted:
+                    summary_lines.append(f"  - Networks: {total_networks_deleted}")
+                if total_volumes_deleted:
+                    summary_lines.append(f"  - Volumes: {total_volumes_deleted}")
+                if total_build_cache_deleted:
+                    summary_lines.append(f"  - Build caches: {total_build_cache_deleted}")
+                if total_space_reclaimed:
+                    summary_lines.append(f"  - Space reclaimed: {human_bytes(total_space_reclaimed)}")
+            else:
+                summary_lines.append("Nothing to prune in this run")
 
         message = "\n".join(summary_lines)
         notif_priority = config.get("notifications", {}).get("priority", "medium")
@@ -1973,6 +1988,46 @@ def list_hosts():
     ] + external_hosts
     
     return jsonify({"hosts": all_hosts})
+
+
+@app.route("/hosts/status")
+def get_host_status():
+    """Check enabled external Docker hosts and return their connection status."""
+    load_config(silent=True)
+    configured_hosts = config.get("docker_hosts", [])
+    external_hosts = [
+        (index, host) for index, host in enumerate(configured_hosts)
+        if host.get("name") != "Local" and "unix://" not in host.get("url", "")
+    ]
+
+    def check_host(index, host):
+        if not host.get("enabled", True):
+            return {"index": index, "status": "disabled"}
+
+        host_url = (host.get("url") or "").strip()
+        if not host_url.startswith(("tcp://", "http://", "https://")):
+            return {"index": index, "status": "offline"}
+
+        client = create_docker_client(host_url)
+        if client is None:
+            return {"index": index, "status": "offline"}
+
+        try:
+            return {"index": index, "status": "online"}
+        finally:
+            client.close()
+
+    if not external_hosts:
+        return jsonify({"statuses": []})
+
+    with ThreadPoolExecutor(max_workers=min(8, len(external_hosts))) as executor:
+        statuses = list(executor.map(
+            check_host,
+            (index for index, _ in external_hosts),
+            (host for _, host in external_hosts),
+        ))
+
+    return jsonify({"statuses": statuses})
 
 
 @app.route("/hosts/add", methods=["POST"])

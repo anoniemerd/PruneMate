@@ -15,6 +15,8 @@ flowchart TD
     
     Start --> Scheduler[Scheduler<br/>every minute]
     Start --> API[API Endpoints<br/>/stats, /api/stats<br/>no auth required]
+    WebUI --> |Every 60s| Health[Host Health Check<br/>/hosts/status<br/>Docker ping, parallel]
+    Health --> |online/offline/disabled| StatusDot[Status dot color<br/>green/red/grey]
     
     WebUI --> |Configure| Config[(config.json<br/>• Schedule enabled<br/>• Frequency<br/>• Prune options<br/>• Notifications<br/>• Remote hosts)]
     WebUI --> |View Stats| StatsUI[Display stats.json<br/>All-time metrics]
@@ -72,6 +74,7 @@ flowchart TD
     style Preview fill:#e67e22
     style API fill:#2ecc71
     style Remote fill:#8e44ad
+    style Health fill:#1abc9c
     style CheckSchedule fill:#c0392b
 ```
 
@@ -86,6 +89,7 @@ flowchart TD
 - **API Endpoints**: REST API for external integrations
   - `/stats` & `/api/stats`: Public endpoints (no auth required) for Homepage widgets and Dashy
   - Returns all-time statistics and last run information
+  - `/hosts/status`: Checks enabled external hosts in parallel and returns `online`, `offline` or `disabled` per host
 
 ### Configuration & State
 
@@ -112,6 +116,8 @@ flowchart TD
 - **Local Host**: Direct access via `unix:///var/run/docker.sock`
 - **Remote Hosts**: Secure access via docker-socket-proxy at `tcp://host:2375`
 - **Per-host Results**: Separate statistics and error handling for each host
+- **Health Check**: Remote connections are verified with a Docker ping (5s connect timeout, 60s afterwards for operations)
+  - The UI polls `/hosts/status` every 60 seconds and colors each host's status dot: green (online), red (offline), grey (disabled), amber (checking/unavailable)
 
 ### Notification Flow
 
@@ -127,7 +133,8 @@ flowchart TD
   - Discord: Color mapping (Low=Green, Medium=Orange, High=Red)
   - Telegram: Notification sound (Low=Silent, Medium/High=Sound)
 - **Smart Notifications**: Optional "only on changes" mode to reduce noise
-- **Per-host Breakdown**: Detailed results for each Docker host in multi-host setups
+- **Per-host Breakdown**: Compact plain-text results (no emojis) listing only items that were pruned
+  - Totals across hosts are omitted when only one host had deletions
 
 ## Workflow Explanation
 
