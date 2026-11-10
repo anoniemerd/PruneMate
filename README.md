@@ -77,14 +77,14 @@ Add external Docker hosts via [docker-socket-proxy](https://github.com/Tecnativa
 Set up notifications via Gotify, ntfy.sh, Discord, or Telegram to stay informed about cleanup results.
 
 <p align="center">
-  <img width="400" height="400" alt="prunemate-notifications" src="https://github.com/user-attachments/assets/73a06c4d-fffa-40eb-a010-239d7d364004" /> 
+  <img width="1194" height="521" alt="afbeelding" src="https://github.com/user-attachments/assets/f30d9063-01ca-4916-8c2c-7d0cecd6ab33" />
 </p>
 
 ### Prune preview
 A brief interface that shows which Docker resources will be pruned during the next cleanup run, either manually triggered or scheduled.
 
 <p align="center">
-  <img width="400" height="400" alt="prunemate-preview" src="https://github.com/user-attachments/assets/34fb445d-8956-46e8-84df-b6718db3f556" /> 
+  <img width="1200" height="600" alt="prunemate-preview" src="https://github.com/user-attachments/assets/34fb445d-8956-46e8-84df-b6718db3f556" /> 
 </p>
 
 
