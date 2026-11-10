@@ -63,14 +63,14 @@ The overall look and feel of the PruneMate dashboard
 The login page, (when enabled in the docker-compose.yaml environment variables)
 
 <p align="center">
-  <img width="400" height="800" src="https://github.com/user-attachments/assets/29ea359c-452e-4e1d-8567-c8fd65b08d4e" /> 
+  <img width="638" height="762" alt="afbeelding" src="https://github.com/user-attachments/assets/4bcfd33f-dee8-4d8a-8f40-5f6c5689b971" />
 </p>
 
 ### External Docker hosts
 Add external Docker hosts via [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy)
 
 <p align="center">
-  <img width="400" height="400" alt="prunemate-cleanup" src="https://github.com/user-attachments/assets/28abdbe4-bd9e-4272-a6fc-24a4a8dc83bb" />
+  <img width="1194" height="521" alt="afbeelding" src="https://github.com/user-attachments/assets/5a2ea525-fa8d-4b45-8b2d-80ef39a0dfc9" />
 </p>
 
 ### Notification Settings
