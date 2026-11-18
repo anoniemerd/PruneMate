@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
         "ntfy": {"enabled": False, "url": "", "topic": "", "token": ""},
         "discord": {"enabled": False, "webhook_url": ""},
         "telegram": {"enabled": False, "bot_token": "", "chat_id": ""},
+        "slack": {"enabled": False, "webhook_url": ""},
         "priority": "medium",
         "only_on_changes": True,
     },
@@ -495,7 +496,7 @@ def load_config(silent=False):
                 merged["notifications"] = json.loads(json.dumps(DEFAULT_CONFIG["notifications"]))
             
             # Ensure all provider subkeys exist (forward compatibility for new providers like telegram)
-            for provider_key in ["gotify", "ntfy", "discord", "telegram"]:
+            for provider_key in ["gotify", "ntfy", "discord", "telegram", "slack"]:
                 if provider_key not in merged["notifications"]:
                     merged["notifications"][provider_key] = json.loads(json.dumps(DEFAULT_CONFIG["notifications"][provider_key]))
             
@@ -784,8 +785,70 @@ def _send_telegram(cfg: dict, title: str, message: str, priority: str = "medium"
         return False
 
 
+def _send_slack(cfg: dict, title: str, message: str, priority: str = "medium") -> bool:
+    """Send a notification via Slack Incoming Webhook."""
+    if not cfg.get("enabled"):
+        log("Slack disabled; skipping notification.")
+        return False
+    webhook_url = (cfg.get("webhook_url") or "").strip()
+    if not webhook_url:
+        log("Slack enabled but webhook_url missing; skipping.")
+        return False
+
+    if not webhook_url.startswith("https://hooks.slack.com/"):
+        log(f"Invalid Slack webhook URL format: {webhook_url[:50]}...")
+        return False
+
+    # Map priority to Slack attachment color
+    color_map = {
+        "low": "good",      # Green
+        "medium": "warning", # Orange/Yellow
+        "high": "danger",   # Red
+    }
+    color = color_map.get(priority, "good")
+
+    payload = {
+        "attachments": [{
+            "fallback": f"{title}: {message}",
+            "color": color,
+            "title": title,
+            "text": message,
+            "ts": int(datetime.datetime.now(app_timezone).timestamp()),
+        }]
+    }
+
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        webhook_url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "PruneMate/1.3.2 (Docker cleanup bot)",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            log(f"Slack notification sent, status={getattr(resp, 'status', '?')}")
+            return True
+    except urllib.error.HTTPError as e:
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8")
+        except Exception:
+            pass
+        log(f"Slack webhook HTTP error {e.code}: {e.reason}. Body: {error_body[:200]}")
+        return False
+    except urllib.error.URLError as e:
+        log(f"Slack webhook network error: {e.reason}")
+        return False
+    except Exception as e:
+        log(f"Failed to send Slack notification: {e}")
+        return False
+
+
 def send_notification(title: str, message: str, priority: str = "medium") -> bool:
-    """Send a notification using the configured provider (gotify, ntfy, discord, or telegram)."""
+    """Send a notification using the configured provider (gotify, ntfy, discord, telegram, or slack)."""
     notcfg = config.get("notifications", DEFAULT_CONFIG["notifications"])
     provider = (notcfg.get("provider") or "gotify").lower()
     if provider == "gotify":
@@ -796,6 +859,8 @@ def send_notification(title: str, message: str, priority: str = "medium") -> boo
         return _send_discord(notcfg.get("discord", {}), title, message, priority)
     if provider == "telegram":
         return _send_telegram(notcfg.get("telegram", {}), title, message, priority)
+    if provider == "slack":
+        return _send_slack(notcfg.get("slack", {}), title, message, priority)
     log(f"Unknown notification provider '{provider}'; skipping.")
     return False
 
@@ -1673,6 +1738,8 @@ def update():
     telegram_enabled = "telegram_enabled" in request.form
     telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
     telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
+    slack_enabled = "slack_enabled" in request.form
+    slack_webhook_url = (request.form.get("slack_webhook_url") or "").strip()
     # Parse notification priority (low/medium/high, default 'medium')
     notification_priority = request.form.get("notification_priority", "medium").strip().lower()
     if notification_priority not in ["low", "medium", "high"]:
@@ -1688,6 +1755,8 @@ def update():
         discord_enabled = True
     if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
         telegram_enabled = True
+    if provider == "slack" and not slack_enabled and slack_webhook_url:
+        slack_enabled = True
 
     time_value = validate_time(time_value)
 
@@ -1708,6 +1777,7 @@ def update():
             "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
             "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
             "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
+            "slack": {"enabled": slack_enabled, "webhook_url": slack_webhook_url},
             "priority": notification_priority,
             "only_on_changes": only_on_changes,
         },
@@ -1850,6 +1920,8 @@ def test_notification():
     telegram_enabled = "telegram_enabled" in request.form
     telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
     telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
+    slack_enabled = "slack_enabled" in request.form
+    slack_webhook_url = (request.form.get("slack_webhook_url") or "").strip()
     # Parse notification priority (low/medium/high, default 'medium')
     notification_priority = request.form.get("notification_priority", "medium").strip().lower()
     if notification_priority not in ["low", "medium", "high"]:
@@ -1865,6 +1937,8 @@ def test_notification():
         discord_enabled = True
     if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
         telegram_enabled = True
+    if provider == "slack" and not slack_enabled and slack_webhook_url:
+        slack_enabled = True
 
     time_value = validate_time(time_value)
 
@@ -1884,6 +1958,7 @@ def test_notification():
             "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
             "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
             "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
+            "slack": {"enabled": slack_enabled, "webhook_url": slack_webhook_url},
             "priority": notification_priority,
             "only_on_changes": only_on_changes,
         },
