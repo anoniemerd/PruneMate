@@ -1,0 +1,6 @@
+flask
+werkzeug
+filelock
+gunicorn
+apscheduler
+docker
