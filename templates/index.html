@@ -2,531 +2,188 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="csrf-token" content="{{ csrf_token() }}" />
+  <meta name="color-scheme" content="dark" />
   <title>PruneMate - Docker cleanup helper</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
-
-  <link rel="icon" type="image/svg+xml"
-        href="{{ url_for('static', filename='prunemate-icon.svg') }}"/>
-
-  <style>
-    /* CSS custom properties (theme colors and design tokens) */
-    :root{
-      --bg-900: #020617;
-      --bg-800: #0b1120;
-      --accent: #0ea5e9;
-      --accent-strong: #22c55e;
-      --accent-soft: rgba(14,165,233,0.14);
-      --muted: #9ca3af;
-      --text: #e6eef6;
-      --card-border: rgba(148,163,184,0.06);
-      --glass-border: rgba(148,163,184,0.12);
-      --focus: 0 6px 24px rgba(14,165,233,0.12);
-      --shadow-strong: 0 32px 70px rgba(0,0,0,0.75);
-      --radius-lg: 18px;
-      --radius-xl: 24px;
-      --btn-elev: 0 10px 30px rgba(16,185,129,0.15);
-    }
-
-    /* Global box-sizing reset */
-    *{box-sizing:border-box}
-
-    /* Full-height layout setup */
-    html,body{height:100%}
-    /* Main body styling with gradient background and flexbox centering */
-    body {
-      margin:0;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      color:var(--text);
-      background:
-        radial-gradient(600px 300px at 12% 6%, rgba(14,165,233,0.10), transparent 22%),
-        linear-gradient(135deg, var(--bg-900), var(--bg-800));
-      background-attachment: fixed;
-      min-height:100vh;
-      display:flex;
-      align-items:flex-start;
-      justify-content:center;
-      padding:16px 16px;
-    }
-
-    /* Main content container with glass morphism effect */
-    .container{
-      width:100%;
-      max-width:820px;
-      background: linear-gradient(180deg, rgba(18,25,44,0.9), rgba(8,12,22,0.9));
-      border-radius:var(--radius-xl);
-      padding:18px;
-      position:relative;
-      box-shadow: var(--shadow-strong), 0 10px 35px rgba(2,6,23,0.6);
-      border:1px solid var(--glass-border);
-      overflow:hidden;
-      backdrop-filter: blur(6px) saturate(1.05);
-    }
-
-    /* Glass effect overlay for container */
-    .container::before{
-      content:"";
-      position:absolute;
-      inset:0;
-      pointer-events:none;
-      border-radius:inherit;
-      background: linear-gradient(180deg, rgba(255,255,255,0.01), transparent 30%);
-      mix-blend-mode:overlay;
-    }
-
-    /* Header layout and logo styling */
-    .header{display:flex;align-items:center;gap:14px;margin-bottom:8px}
-    .title-block{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;transform:translateY(4px)}
-    .logo-wrap{width:82px;height:82px;border-radius:16px;flex-shrink:0}
-    .logo-wrap img{width:100%;height:100%;object-fit:cover;display:block}
-    .title-block h1{display:none}
-    .wordmark{height:36px;max-width:360px}
-    .title-block p{margin:4px 0 0 0;color:var(--muted);font-size:0.88rem}
-
-    /* Typography for headings and labels */
-    h2{font-size:0.98rem;margin-top:0.9rem;margin-bottom:0.3rem;color:var(--text)}
-    h3{font-size:0.9rem;margin:4px 0 6px 0;color:var(--muted);font-weight:600}
-    label{font-size:0.9rem;color:var(--text)}
-
-    /* Flash messages */
-    .flash{padding:10px 12px;border-radius:12px;margin:10px 0;font-size:0.95rem}
-    .flash.info{background:linear-gradient(90deg, rgba(14,165,233,0.08), rgba(59,130,246,0.02));border:1px solid rgba(14,165,233,0.15);color:var(--text)}
-    .flash.warn{background:linear-gradient(90deg, rgba(245,158,11,0.06), transparent);border:1px solid rgba(245,158,11,0.12);color:#ffedd5}
-
-    /* Form inputs */
-    input[type="time"], select, input[type="number"], input[type="text"], input[type="password"]{
-      padding:8px 12px;border-radius:9999px;border:1px solid rgba(255,255,255,0.06);
-      background: rgba(2,6,23,0.6);color:var(--text);font-size:0.95rem;outline:none;
-      transition: box-shadow .16s ease, border-color .12s ease, transform .08s ease;
-      backdrop-filter: blur(6px);
-      font-family: "Montserrat", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      font-weight:600;
-    }
-    input[type="time"]:focus, select:focus, input[type="number"]:focus, input[type="text"]:focus, input[type="password"]:focus{
-      box-shadow: var(--focus);
-      border-color: rgba(14,165,233,0.6);
-    }
-
-    /* Field layout within inline rows */
-    .row.inline .field{
-      min-width:160px;
-      display:flex;
-      flex-direction:column;
-    }
-
-    /* Schedule: 3-column grid for consistent alignment */
-    .card.schedule .row.inline{
-      display:grid;
-      grid-template-columns:repeat(3,1fr);
-      gap:16px;
-      align-items:stretch;
-    }
-    .card.schedule .row.inline .field{
-      display:flex;
-      flex-direction:column;
-      min-width:0;
-      width:100%;
-    }
-    /* Placeholder cell (third column on daily mode) keeps Time centered */
-    #schedule-placeholder{display:none;visibility:hidden;pointer-events:none;min-width:0;}
-    /* Schedule and notification labels: 2mm left padding for alignment */
-    .card.schedule .row.inline .field > label{margin:0 0 6px 0;line-height:1.3;display:block;padding-left:2mm;}
-    #notif-panel .row.inline .field > label{margin:0 0 6px 0;line-height:1.3;display:block;padding-left:2mm;}
-    /* Normalize input line-height and box-sizing for consistent pill heights */
-    .card.schedule .row.inline input,
-    .card.schedule .row.inline select{line-height:1.4;box-sizing:border-box;width:100%;}
-    /* Remove number input spinner for clean appearance */
-    input[type="number"]::-webkit-inner-spin-button,
-    input[type="number"]::-webkit-outer-spin-button{ -webkit-appearance: none; margin:0; }
-    input[type="number"]{ -moz-appearance: textfield; appearance:textfield; }
-
-    /* Input and select field dimensions */
-    select{width:100%; min-width:140px}
-    input[type="time"], input[type="number"]{width:100%}
-
-    /* Card container styling with gradient background */
-    .card{
-      background: linear-gradient(160deg, rgba(12,18,32,0.92), rgba(10,14,24,0.86));
-      border-radius:var(--radius-lg);
-      padding:12px;
-      border:1px solid var(--card-border);
-      box-shadow: 0 6px 26px rgba(3,6,14,0.5);
-      margin-top:6px;
-    }
-
-    /* Row and field layout */
-    .row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:8px}
-    .row.inline{align-items:center}
-    .row .field{min-width:160px}
-    /* Global label indent (8px default, schedule grid overrides to 2mm) */
-    .field > label:first-child{padding-left:8px;display:block;}
-    .card.schedule .row.inline .field > label:first-child{padding-left:2mm;}
-
-    /* Buttons: consistent vertical centering with asymmetric padding (text nudged up 1mm) */
-    .btn{display:inline-flex;align-items:center;justify-content:center;border-radius:9999px;padding:7px 18px 9px 18px;font-size:0.9rem;font-weight:600;cursor:pointer;border:none;transition:transform .08s ease,box-shadow .12s ease,opacity .12s ease; font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height:1.05;}
-    .btn-primary{background:linear-gradient(90deg,#22c55e,#16a34a);color:#05220f;box-shadow:var(--btn-elev);padding:7px 20px 9px 20px}
-    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 18px 44px rgba(16,185,129,0.14)}
-    /* Secondary button: subtle glass effect with theme border */
-    .btn-secondary{background:linear-gradient(180deg,rgba(255,255,255,0.035),rgba(255,255,255,0.02));color:var(--text);border:1px solid var(--glass-border);padding:7px 18px 9px 18px;box-shadow:inset 0 0 0 1px rgba(255,255,255,0.015),0 4px 14px rgba(2,6,23,0.5);backdrop-filter:blur(4px) saturate(1.1);white-space:nowrap;}
-    .btn-secondary:hover{transform:translateY(-2px);background:linear-gradient(180deg,rgba(255,255,255,0.06),rgba(255,255,255,0.03));border-color:rgba(148,163,184,0.28);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.015),0 8px 24px rgba(2,6,23,0.6);}
-    .btn-secondary:active{transform:translateY(1px);box-shadow:inset 0 0 0 1px rgba(255,255,255,0.03),0 2px 10px rgba(2,6,23,0.55);}
-
-    /* Small text styling for hints and footer */
-    .hint{font-size:0.78rem;color:var(--muted);margin-top:4px}
-    .footer{text-align:center;margin-top:12px;font-size:0.78rem;color:#9aa4b2}
-
-    /* Toggle switches */
-    /* Toggle row container layout */
-    .toggle-row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:5px 0}
-    .toggle-row span.label-text{font-size:0.9rem;color:var(--text)}
-    /* Switch container dimensions */
-    .switch{position:relative;display:inline-block;width:48px;height:26px;flex-shrink:0}
-    /* Hide native checkbox input */
-    .switch input{opacity:0;width:0;height:0}
-    /* Slider track background */
-    .slider{position:absolute;cursor:pointer;inset:0;background-color:#374151;border-radius:9999px;transition:.18s;border:1px solid rgba(0,0,0,0.25)}
-    /* Slider knob: 4px horizontal margin for equal spacing */
-    .slider:before{position:absolute;content:"";height:18px;width:18px;left:4px;bottom:4px;background-color:#fff;transition:.18s;border-radius:9999px;box-shadow:0 4px 12px rgba(2,6,23,0.55)}
-    /* Checked state styling with green gradient */
-    .switch input:checked + .slider{background:linear-gradient(90deg,var(--accent-strong),#16a34a);box-shadow:0 0 12px rgba(34,197,94,0.14)}
-    /* Move slider knob when checked */
-    .switch input:checked + .slider:before{transform:translateX(22px)}
-    /* Disabled state styling */
-    .switch input:disabled + .slider{opacity:0.4;cursor:default;box-shadow:none}
-
-    /* Toast notification styling (fixed position with animation) */
-    .toast {
-      position:fixed;
-      left:50%;
-      top:20px;
-      transform:translateX(-50%) translateY(-12px);
-      background: linear-gradient(90deg, rgba(34,197,94,0.12), rgba(14,165,233,0.08));
-      color: #e6fff0;
-      border: 1px solid rgba(34,197,94,0.18);
-      padding:14px 20px;
-      border-radius:12px;
-      box-shadow: 0 18px 50px rgba(2,6,23,0.6);
-      font-weight:700;
-      font-family: "Montserrat", Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      letter-spacing:0.2px;
-      opacity:0;
-      pointer-events:none;
-      transition: transform .28s cubic-bezier(.2,.9,.3,1), opacity .28s ease;
-      z-index:1200;
-      max-width:calc(100% - 48px);
-      text-align:center;
-    }
-    /* Toast visible state */
-    .toast.show {
-      opacity:1;
-      transform:translateX(-50%) translateY(0);
-      pointer-events:auto;
-    }
-
-    /* Toast close button */
-    .toast .close {
-      margin-left:12px;
-      background:transparent;
-      border:none;
-      color:inherit;
-      font-weight:800;
-      cursor:pointer;
-      opacity:0.9;
-    }
-
-    .btn-info {
-      position: absolute;
-      top: 24px;
-      right: 24px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      text-decoration: none;
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--muted);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--glass-border);
-      width: 36px;
-      height: 36px;
-      border-radius: 9999px;
-      transition: all 0.2s ease;
-      backdrop-filter: blur(4px);
-      z-index: 10;
-    }
-
-    /* Shift info button left when logout button is present */
-    .header-buttons.has-logout .btn-info {
-      right: 125px;
-    }
-
-    .btn-info:hover {
-      background: rgba(14, 165, 233, 0.1);
-      color: #7dd3fc;
-      border-color: rgba(14, 165, 233, 0.2);
-      transform: translateY(-1px);
-    }
-
-    .btn-info svg {
-      width: 18px;
-      height: 18px;
-      stroke-width: 2;
-    }
-
-    .btn-logout {
-      position: absolute;
-      top: 24px;
-      right: 24px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      text-decoration: none;
-      font-size: 0.85rem;
-      font-weight: 600;
-      color: var(--muted);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px solid var(--glass-border);
-      padding: 8px 14px;
-      border-radius: 9999px;
-      transition: all 0.2s ease;
-      backdrop-filter: blur(4px);
-      z-index: 10;
-    }
-
-    .btn-logout:hover {
-      background: rgba(239, 68, 68, 0.1);
-      color: #fca5a5;
-      border-color: rgba(239, 68, 68, 0.2);
-      transform: translateY(-1px);
-    }
-
-    .btn-logout svg {
-      width: 16px;
-      height: 16px;
-      stroke-width: 2.5;
-    }
-
-    /* Mobile responsive styles for smaller screens */
-    @media (max-width: 640px){
-      .container{padding:18px;border-radius:18px}
-      .row.inline{flex-direction:column;align-items:flex-start;gap:10px}
-      select,input[type="time"],input[type="number"]{width:100%}
-      .logo-wrap{width:80px;height:80px}
-      .wordmark{height:36px}
-      /* Statistics grid: 2 columns on mobile */
-      #stats-content > div:first-child{grid-template-columns:repeat(2,1fr)!important;}
-      /* Schedule grid: stack vertically on mobile */
-      .card.schedule .row.inline{grid-template-columns:1fr!important;gap:10px;}
-      .card.schedule .row.inline .field{width:100%;}
-      .btn-logout span { display: none; }
-      .btn-logout { padding: 8px; }
-      .header-buttons.has-logout .btn-info { right: 50px; }
-    }
-
-    /* Utility classes */
-    .muted{color:var(--muted)}
-    /* Screen reader only text (accessible but invisible) */
-    .visually-hidden{position:absolute!important;height:1px;width:1px;overflow:hidden;clip:rect(1px,1px,1px,1px);white-space:nowrap}
-    /* Collapsible notification panel */
-    #notif-card #notif-panel{transition:max-height .2s ease-out;overflow:hidden;will-change:max-height;transform:translateZ(0);}
-    #notif-card.collapsed #notif-panel{max-height:0!important;}
-    #notif-card:not(.collapsed) #notif-panel{max-height:900px;}
-    #notif-arrow{transition:transform .2s ease;will-change:transform;}
-    #notif-card.collapsed #notif-arrow{transform:rotate(0deg);}
-    #notif-card:not(.collapsed) #notif-arrow{transform:rotate(180deg);}
-    /* Collapsible Docker hosts panel */
-    #hosts-card #hosts-panel{transition:max-height .2s ease-out;overflow:hidden;will-change:max-height;transform:translateZ(0);}
-    #hosts-card.collapsed #hosts-panel{max-height:0!important;}
-    #hosts-card:not(.collapsed) #hosts-panel{max-height:800px;}
-    #hosts-arrow{transition:transform .2s ease;will-change:transform;}
-    #hosts-card.collapsed #hosts-arrow{transform:rotate(0deg);}
-    #hosts-card:not(.collapsed) #hosts-arrow{transform:rotate(180deg);}
-  </style>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='prunemate-icon.svg') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v={{ app_version }}" />
+  <script src="{{ url_for('static', filename='js/app.js') }}?v={{ app_version }}" defer></script>
 </head>
-<body>
-  <!-- Retrieve flash messages from Flask session -->
-  {% set _flashes = get_flashed_messages(with_categories=false) %}
-  <!-- Toast notification for flash messages -->
-  <div id="toast" class="toast" data-message="{% if _flashes %}{{ _flashes[0] | e }}{% endif %}">
-    <span id="toast-text"></span>
-    <button id="toast-close" class="close" aria-label="Close">&times;</button>
-  </div>
+{% set _flashes = get_flashed_messages(with_categories=true) %}
+<body data-clock="{{ '24' if use_24h else '12' }}"
+      data-timezone="{{ timezone }}"
+      {% if _flashes %}data-flash="{{ _flashes[0][1] }}" data-flash-type="{{ _flashes[0][0] }}"{% endif %}>
 
-  <!-- Main application container -->
-  <div class="container">
-    <!-- Header buttons container -->
-    <div class="header-buttons {% if session.get('logged_in') %}has-logout{% endif %}">
-      <!-- Info button linking to website -->
-      <a href="https://prunemate.org" class="btn-info" target="_blank" rel="noopener noreferrer" title="Visit PruneMate Documentation">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
-      </a>
-      {% if session.get('logged_in') %}
-      <a href="{{ url_for('logout') }}" class="btn-logout" title="Logout">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0013.5 3h-6a2.25 2.25 0 00-2.25 2.25v13.5A2.25 2.25 0 007.5 21h6a2.25 2.25 0 002.25-2.25V15M12 9l-3 3m0 0l3 3m-3-3h12.75" />
-        </svg>
-        <span>Logout</span>
-      </a>
-      {% endif %}
-    </div>
-    <!-- Header with logo and title -->
-    <div class="header">
-      <div class="logo-wrap">
-        <img src="{{ url_for('static', filename='prunemate.png') }}"
-             alt="prunemate logo" />
-      </div>
-      <!-- Title block with SVG wordmark -->
+  <!-- Icon sprite (stroke icons, 24x24) -->
+  <svg xmlns="http://www.w3.org/2000/svg" class="visually-hidden" aria-hidden="true" focusable="false">
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+    <symbol id="i-logout" viewBox="0 0 24 24"><path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11"/></symbol>
+    <symbol id="i-logs" viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h6"/></symbol>
+    <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+    <symbol id="i-calendar" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></symbol>
+    <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></symbol>
+    <symbol id="i-disk" viewBox="0 0 24 24"><path d="M22 12H2M5.5 5h13L22 12v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/><path d="M6 16h.01M10 16h.01"/></symbol>
+    <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-check-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m8 12 3 3 5-6"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
+    <symbol id="i-x-circle" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m15 9-6 6M9 9l6 6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-server" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></symbol>
+    <symbol id="i-bell" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"/><path d="M10 21h4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+    <symbol id="i-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="m7 4 13 8-13 8z"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></symbol>
+    <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 0 1-15.5 6.3L3 16M3 12a9 9 0 0 1 15.5-6.3L21 8"/><path d="M21 3v5h-5M3 21v-5h5"/></symbol>
+    <symbol id="i-chevron" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></symbol>
+    <symbol id="i-container" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z"/><path d="m3 8 9 5 9-5M12 13v8"/></symbol>
+    <symbol id="i-image" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7z"/><path d="m2 12 10 5 10-5M2 17l10 5 10-5"/></symbol>
+    <symbol id="i-network" viewBox="0 0 24 24"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5"/></symbol>
+    <symbol id="i-volume" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></symbol>
+    <symbol id="i-build" viewBox="0 0 24 24"><path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9"/><path d="m18 15 4-4"/><path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-1.13a6 6 0 0 0-2.648-.62H12l.5.5 2.5 2.5v1.172a2 2 0 0 0 .586 1.414L17 12"/></symbol>
+    <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+  </svg>
+
+  <div class="toast-stack" id="toasts" aria-live="polite" aria-atomic="false"></div>
+
+  <main class="container">
+    <header class="header">
+      <img class="logo" src="{{ url_for('static', filename='prunemate.png') }}" alt="" />
       <div class="title-block">
-        <h1 class="visually-hidden">PruneMate</h1>
-        <svg class="wordmark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 48" role="img" aria-label="PruneMate">
-          <defs>
-            <style>
-              .wm { font-family: "Montserrat", system-ui, -apple-system, "Segoe UI", sans-serif; font-weight:700; font-size:40px; }
-              .blue { fill: #0ea5e9; }
-              .white { fill: #ffffff; }
-            </style>
-          </defs>
-          <text class="wm" x="0" y="36">
-            <tspan class="blue">Prune</tspan>
-            <tspan class="white" dx="-11">Mate</tspan>
-          </text>
-        </svg>
-        <p>Docker image & resource cleanup helper, on a schedule!</p>
-       </div>
-    </div>
-
-    <!-- All-Time Statistics Card -->
-    <h2 style="margin-top:0.8rem;font-size:0.95rem;">All-Time Statistics</h2>
-    <div class="card" id="stats-card" style="padding:12px;">
-      <div id="stats-loading" style="text-align:center;color:var(--muted);padding:6px;font-size:0.85rem;">
-        Loading statistics...
+        <h1 class="wordmark"><span class="wm-a">Prune</span><span class="wm-b">Mate</span></h1>
+        <p class="tagline">Docker image &amp; resource cleanup helper, on a schedule!</p>
       </div>
-      <div id="stats-content" style="display:none;">
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
-          <!-- Total Space Reclaimed -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(34,197,94,0.06),rgba(14,165,233,0.04));border-radius:8px;border:1px solid rgba(34,197,94,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:var(--accent-strong);font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-space">0 B</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Total Reclaimed</div>
-          </div>
-          
-          <!-- Prune Runs -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(14,165,233,0.06),rgba(99,102,241,0.04));border-radius:8px;border:1px solid rgba(14,165,233,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:var(--accent);font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-runs">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Prune Runs</div>
-          </div>
-          
-          <!-- Containers Deleted -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(168,85,247,0.06),rgba(236,72,153,0.04));border-radius:8px;border:1px solid rgba(168,85,247,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:#c084fc;font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-containers">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Containers</div>
-          </div>
-          
-          <!-- Images Deleted -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(59,130,246,0.06),rgba(14,165,233,0.04));border-radius:8px;border:1px solid rgba(59,130,246,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:#60a5fa;font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-images">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Images</div>
-          </div>
-          
-          <!-- Networks Deleted -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(251,191,36,0.06),rgba(245,158,11,0.04));border-radius:8px;border:1px solid rgba(251,191,36,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:#fbbf24;font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-networks">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Networks</div>
-          </div>
-          
-          <!-- Volumes Deleted -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(239,68,68,0.06),rgba(220,38,38,0.04));border-radius:8px;border:1px solid rgba(239,68,68,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:#f87171;font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-volumes">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Volumes</div>
-          </div>
-          
-          <!-- Build Cache Deleted -->
-          <div style="text-align:center;padding:6px;background:linear-gradient(135deg,rgba(34,197,94,0.06),rgba(16,185,129,0.04));border-radius:8px;border:1px solid rgba(34,197,94,0.1);">
-            <div style="font-size:1.3rem;font-weight:700;color:#34d399;font-family:'Montserrat',sans-serif;margin-bottom:1px;" id="stats-build-cache">0</div>
-            <div style="font-size:0.73rem;color:var(--muted);font-weight:600;">Build Cache</div>
-          </div>
+      <nav class="header-actions" aria-label="Application">
+        <button type="button" class="icon-btn" data-action="open-logs" title="View logs">
+          <svg class="icon"><use href="#i-logs"/></svg><span class="label">Logs</span>
+        </button>
+        <a href="https://prunemate.org" class="icon-btn" target="_blank" rel="noopener noreferrer" title="PruneMate documentation">
+          <svg class="icon"><use href="#i-info"/></svg><span class="visually-hidden">Documentation</span>
+        </a>
+        {% if auth_enabled and session.get('logged_in') %}
+        <form method="post" action="{{ url_for('logout') }}">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+          <button type="submit" class="icon-btn danger" title="Sign out">
+            <svg class="icon"><use href="#i-logout"/></svg><span class="label">Logout</span>
+          </button>
+        </form>
+        {% endif %}
+      </nav>
+    </header>
+
+    {% if not config_writable %}
+    <div class="callout danger" role="alert">
+      <svg class="icon"><use href="#i-alert"/></svg>
+      <div><strong>Settings can't be saved.</strong> PruneMate has no write access to <code>{{ config_dir }}</code>, so settings,
+        statistics and history are lost. Make the host directory writable for root
+        (<code>sudo chown -R root:root ./config ./logs</code>) or remove <code>cap_drop: ALL</code> from your compose file.</div>
+    </div>
+    {% endif %}
+
+    {% if not auth_enabled %}
+    <div class="callout warn" role="note">
+      <svg class="icon"><use href="#i-lock"/></svg>
+      <div><strong>Authentication is disabled.</strong> Anyone who can reach this page can change settings and delete Docker resources.
+        Set <code>PRUNEMATE_AUTH_PASSWORD_HASH</code> to enable the login.</div>
+    </div>
+    {% endif %}
+
+    <!-- ===== Dashboard ===== -->
+    <section aria-labelledby="dash-title">
+      <h2 id="dash-title" class="visually-hidden">Overview</h2>
+      <div class="tiles">
+        <div class="tile">
+          <div class="tile-label"><svg class="icon icon-sm"><use href="#i-clock"/></svg>Next run</div>
+          <div class="tile-value" id="next-run-rel">–</div>
+          <div class="tile-sub" id="next-run-abs">&nbsp;</div>
         </div>
-        
-        <!-- First and Last Run Dates -->
-        <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--card-border);display:flex;justify-content:space-around;flex-wrap:wrap;gap:8px;">
-          <div style="text-align:center;">
-            <div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px;">First Run</div>
-            <div style="font-size:0.8rem;color:var(--text);font-weight:600;" id="stats-first">-</div>
-          </div>
-          <div style="text-align:center;">
-            <div style="font-size:0.7rem;color:var(--muted);margin-bottom:2px;">Last Run</div>
-            <div style="font-size:0.8rem;color:var(--text);font-weight:600;" id="stats-last">-</div>
-          </div>
+        <div class="tile">
+          <div class="tile-label"><svg class="icon icon-sm"><use href="#i-history"/></svg>Last run</div>
+          <div class="tile-value" id="last-run-rel">–</div>
+          <div class="tile-sub" id="last-run-detail">&nbsp;</div>
+        </div>
+        <div class="tile">
+          <div class="tile-label"><svg class="icon icon-sm"><use href="#i-disk"/></svg>Total reclaimed</div>
+          <div class="tile-value" id="stats-space">–</div>
+          <div class="tile-sub" id="stats-runs-sub">&nbsp;</div>
         </div>
       </div>
-      <div id="stats-error" style="display:none;text-align:center;color:#f87171;padding:8px;font-size:0.9rem;">
-        Failed to load statistics
-      </div>
-    </div>
 
-    <!-- Main configuration form -->
-    <form method="post" action="{{ url_for('update') }}">
-      <!-- Schedule configuration section -->
-      <h2>Schedule</h2>
-      <div class="card schedule">
-        <!-- Toggle for enabling/disabling the schedule -->
+      <div class="card chart-card">
+        <div class="card-head">
+          <h3>Space reclaimed per run</h3>
+          <span class="hint" id="chart-caption">Last 30 runs</span>
+        </div>
+        <div class="chart" id="history-chart"></div>
+        <div class="chart-tooltip" id="chart-tooltip" role="status" hidden></div>
+
+        <details class="history-details">
+          <summary><svg class="icon icon-sm chev"><use href="#i-chevron"/></svg>Recent runs</summary>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr><th>When</th><th>Trigger</th><th>Status</th><th class="num">Items</th><th class="num">Reclaimed</th><th class="num">Duration</th></tr>
+              </thead>
+              <tbody id="history-table"><tr><td colspan="6" class="muted">No runs yet.</td></tr></tbody>
+            </table>
+          </div>
+        </details>
+
+        <div class="counts" aria-label="All-time totals">
+          <div class="count"><div class="count-value" id="stats-runs">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-activity"/></svg>Runs</div></div>
+          <div class="count"><div class="count-value" id="stats-containers">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-container"/></svg>Containers</div></div>
+          <div class="count"><div class="count-value" id="stats-images">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-image"/></svg>Images</div></div>
+          <div class="count"><div class="count-value" id="stats-networks">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-network"/></svg>Networks</div></div>
+          <div class="count"><div class="count-value" id="stats-volumes">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-volume"/></svg>Volumes</div></div>
+          <div class="count"><div class="count-value" id="stats-build-cache">0</div><div class="count-label"><svg class="icon icon-sm"><use href="#i-build"/></svg>Build cache</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===== Settings form ===== -->
+    <form id="settings-form" method="post" action="{{ url_for('update') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
+
+      <!-- Schedule -->
+      <h2 class="section-title"><svg class="icon"><use href="#i-calendar"/></svg>Schedule</h2>
+      <div class="card">
         <div class="toggle-row">
-          <span class="label-text">Enable automatic schedule</span>
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-schedule">Enable automatic schedule</span>
+            <span class="hint">When disabled, PruneMate only runs when you start it manually.</span>
+          </div>
           <label class="switch">
-            <input type="checkbox" name="schedule_enabled" id="schedule_enabled"
+            <input type="checkbox" name="schedule_enabled" id="schedule_enabled" aria-labelledby="lbl-schedule"
                    {% if config.get('schedule_enabled', true) %}checked{% endif %}>
             <span class="slider"></span>
           </label>
         </div>
 
-        <div class="row inline">
-          <!-- Frequency selector (daily/weekly/monthly) -->
+        <div class="grid-3">
           <div class="field">
-            <label for="frequency">Frequency</label><br/>
-            <select id="frequency" name="frequency" aria-label="Frequency">
+            <label for="frequency">Frequency</label>
+            <select id="frequency" name="frequency">
               <option value="daily" {% if config.frequency == 'daily' %}selected{% endif %}>Daily</option>
               <option value="weekly" {% if config.frequency == 'weekly' %}selected{% endif %}>Weekly</option>
               <option value="monthly" {% if config.frequency == 'monthly' %}selected{% endif %}>Monthly</option>
             </select>
           </div>
 
-          <!-- Time picker (24h or 12h format based on config) -->
           <div class="field">
-            <label for="time"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="vertical-align:-3px;margin-right:5px;"><circle cx="12" cy="12" r="10"></circle><path d="M12 6v6l4 2"></path></svg>Time</label><br />
+            <label for="{{ 'time' if use_24h else 'time-hour' }}"><svg class="icon icon-sm"><use href="#i-clock"/></svg>Time</label>
             {% if use_24h %}
-            <!-- Native 24-hour time picker -->
-            <input
-              type="time"
-              id="time"
-              name="time"
-              value="{{ config.time or '03:00' }}"
-              required
-            />
+            <input type="time" id="time" name="time" value="{{ config.time or '03:00' }}" required />
             {% else %}
-            <!-- 12-hour time picker -->
-            <div style="display: flex; gap: 8px; align-items: center;">
-              <input 
-                type="number" 
-                id="time-hour" 
-                name="time_hour" 
-                min="1" 
-                max="12" 
-                required 
-                style="width: 60px; text-align: center;"
-              />
-              <span style="font-weight: 600;">:</span>
-              <input 
-                type="number" 
-                id="time-minute" 
-                name="time_minute" 
-                min="0" 
-                max="59" 
-                required 
-                style="width: 60px; text-align: center;"
-              />
-              <select id="time-period" name="time_period" required style="width: auto; min-width: 80px;">
+            <div class="time-12h">
+              <input type="number" id="time-hour" name="time_hour" min="1" max="12" required aria-label="Hour" />
+              <span aria-hidden="true">:</span>
+              <input type="number" id="time-minute" name="time_minute" min="0" max="59" required aria-label="Minute" />
+              <select id="time-period" name="time_period" aria-label="AM or PM">
                 <option value="AM">AM</option>
                 <option value="PM">PM</option>
               </select>
@@ -535,1298 +192,338 @@
             {% endif %}
           </div>
 
-          <!-- Day of week selector (shown for weekly frequency) -->
-          <div id="week-row" class="field" style="display:none;">
-            <label for="day_of_week">Day of the week</label><br/>
+          <div class="field" id="week-row" hidden>
+            <label for="day_of_week">Day of the week</label>
             <select id="day_of_week" name="day_of_week">
-              {% set days = [
-                ('mon', 'Monday'),
-                ('tue', 'Tuesday'),
-                ('wed', 'Wednesday'),
-                ('thu', 'Thursday'),
-                ('fri', 'Friday'),
-                ('sat', 'Saturday'),
-                ('sun', 'Sunday')
-              ] %}
-              {% for val, label in days %}
-                <option value="{{ val }}" {% if config.day_of_week == val %}selected{% endif %}>{{ label }}</option>
+              {% for val, label in [('mon','Monday'),('tue','Tuesday'),('wed','Wednesday'),('thu','Thursday'),('fri','Friday'),('sat','Saturday'),('sun','Sunday')] %}
+              <option value="{{ val }}" {% if config.day_of_week == val %}selected{% endif %}>{{ label }}</option>
               {% endfor %}
             </select>
           </div>
 
-          <!-- Day of month selector (shown for monthly frequency) -->
-          <div id="month-row" class="field" style="display:none;">
-            <label for="day_of_month">Day of the month</label><br/>
-            <input
-              type="number"
-              id="day_of_month"
-              name="day_of_month"
-              min="1"
-              max="31"
-              value="{{ config.day_of_month or 1 }}"
-            />
+          <div class="field" id="month-row" hidden>
+            <label for="day_of_month">Day of the month</label>
+            <input type="number" id="day_of_month" name="day_of_month" min="1" max="31" value="{{ config.day_of_month or 1 }}" />
+            <span class="hint">Shorter months run on their last day.</span>
           </div>
-          <!-- Placeholder for grid alignment when daily is selected -->
-          <div id="schedule-placeholder" class="field" style="display:none;"></div>
         </div>
-       <!-- Timezone and time format information -->
-       <p class="hint" style="margin-top:8px;">
-         Using Timezone: {{ timezone }} · Time format: {{ '24-hour' if use_24h else '12-hour (AM/PM)' }}<br>
-       </p>
+        <p class="hint">Timezone: {{ timezone }} · Time format: {{ '24-hour' if use_24h else '12-hour (AM/PM)' }}</p>
       </div>
 
-      <!-- Cleanup options section -->
-      <h2>Cleanup options</h2>
+      <!-- Cleanup options -->
+      <h2 class="section-title"><svg class="icon"><use href="#i-trash"/></svg>Cleanup options</h2>
       <div class="card">
-        <!-- Toggle for pruning unused containers -->
         <div class="toggle-row">
-          <span class="label-text">All unused containers</span>
-          <label class="switch">
-            <input type="checkbox" name="prune_containers" id="prune_containers"
-                   {% if config.prune_containers %}checked{% endif %}>
-            <span class="slider"></span>
-          </label>
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-containers"><svg class="icon icon-sm"><use href="#i-container"/></svg>Stopped containers</span>
+            <span class="hint">Exited, dead and created containers.</span>
+          </div>
+          <label class="switch"><input type="checkbox" name="prune_containers" id="prune_containers" aria-labelledby="lbl-containers" {% if config.prune_containers %}checked{% endif %}><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-images"><svg class="icon icon-sm"><use href="#i-image"/></svg>Unused images</span>
+            <span class="hint">All images not used by any container (not only dangling).</span>
+          </div>
+          <label class="switch"><input type="checkbox" name="prune_images" id="prune_images" aria-labelledby="lbl-images" {% if config.prune_images %}checked{% endif %}><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-networks"><svg class="icon icon-sm"><use href="#i-network"/></svg>Unused networks</span>
+            <span class="hint">Custom networks without connected containers.</span>
+          </div>
+          <label class="switch"><input type="checkbox" name="prune_networks" id="prune_networks" aria-labelledby="lbl-networks" {% if config.prune_networks %}checked{% endif %}><span class="slider"></span></label>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-volumes"><svg class="icon icon-sm"><use href="#i-volume"/></svg>Unused volumes</span>
+            <span class="hint">Includes <strong>named</strong> volumes. Data is deleted permanently.</span>
+          </div>
+          <label class="switch danger"><input type="checkbox" name="prune_volumes" id="prune_volumes" aria-labelledby="lbl-volumes" {% if config.prune_volumes %}checked{% endif %}><span class="slider"></span></label>
+        </div>
+        <div class="callout danger" id="volume-warning" {% if not config.prune_volumes %}hidden{% endif %}>
+          <svg class="icon"><use href="#i-alert"/></svg>
+          <div><strong>Careful: volume pruning deletes data.</strong> Every volume that isn't attached to a container is removed, including
+            databases of stacks that are temporarily stopped. Protect important volumes with the label below, or keep this off.</div>
+        </div>
+        <div class="toggle-row">
+          <div class="toggle-text">
+            <span class="label-text" id="lbl-build"><svg class="icon icon-sm"><use href="#i-build"/></svg>Build cache</span>
+            <span class="hint">Unused BuildKit / builder cache.</span>
+          </div>
+          <label class="switch"><input type="checkbox" name="prune_build_cache" id="prune_build_cache" aria-labelledby="lbl-build" {% if config.prune_build_cache %}checked{% endif %}><span class="slider"></span></label>
         </div>
 
-        <!-- Toggle for pruning unused images -->
-        <div class="toggle-row">
-          <span class="label-text">All unused images</span>
-          <label class="switch">
-            <input type="checkbox" name="prune_images" id="prune_images"
-                   {% if config.prune_images %}checked{% endif %}>
-            <span class="slider"></span>
-          </label>
-        </div>
-
-        <!-- Toggle for pruning unused networks -->
-        <div class="toggle-row">
-          <span class="label-text">All unused networks</span>
-          <label class="switch">
-            <input type="checkbox" name="prune_networks" id="prune_networks"
-                   {% if config.prune_networks %}checked{% endif %}>
-            <span class="slider"></span>
-          </label>
-        </div>
-
-        <!-- Toggle for pruning unused volumes -->
-        <div class="toggle-row">
-          <span class="label-text">All unused volumes</span>
-          <label class="switch">
-            <input type="checkbox" name="prune_volumes" id="prune_volumes"
-                   {% if config.prune_volumes %}checked{% endif %}>
-            <span class="slider"></span>
-          </label>
-        </div>
-
-        <!-- Toggle for pruning build cache -->
-        <div class="toggle-row">
-          <span class="label-text">All build cache</span>
-          <label class="switch">
-            <input type="checkbox" name="prune_build_cache" id="prune_build_cache"
-                   {% if config.prune_build_cache %}checked{% endif %}>
-            <span class="slider"></span>
-          </label>
-        </div>
-      </div>
-
-      <!-- Docker Hosts Management Section -->
-      <h2>Docker Hosts</h2>
-      <!-- Collapsible Docker hosts card -->
-      <div class="card collapsed" id="hosts-card">
-        <!-- Collapsible header button -->
-        <button type="button" id="hosts-header" aria-expanded="false" aria-controls="hosts-panel"
-          style="all:unset;display:flex;width:100%;cursor:pointer;align-items:center;justify-content:space-between;padding:4px 0 8px 0;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="flex-shrink:0;">
-              <rect width="20" height="8" x="2" y="2" rx="2"></rect>
-              <rect width="20" height="8" x="2" y="14" rx="2"></rect>
-              <line x1="6" x2="6.01" y1="6" y2="6"></line>
-              <line x1="6" x2="6.01" y1="18" y2="18"></line>
-            </svg>
-            <div>
-              <strong>External Docker hosts</strong>
-              <div class="hint">Connect to remote Docker hosts via TCP docker-socket-proxy</div>
+        <div class="subsection">
+          <p class="subsection-title"><svg class="icon icon-sm"><use href="#i-shield"/></svg>Protection</p>
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <span class="label-text" id="lbl-protect">Skip resources with a keep label</span>
+              <span class="hint">Containers, images, networks and volumes with this label are never pruned.</span>
+            </div>
+            <label class="switch"><input type="checkbox" name="protect_label_enabled" id="protect_label_enabled" aria-labelledby="lbl-protect" {% if config.protect_label %}checked{% endif %}><span class="slider"></span></label>
+          </div>
+          <div class="grid-2">
+            <div class="field" id="protect-label-field">
+              <label for="protect_label">Label key</label>
+              <input type="text" id="protect_label" name="protect_label" value="{{ config.protect_label or 'prunemate.keep' }}"
+                     maxlength="128" pattern="[A-Za-z0-9][A-Za-z0-9._\/\-]*" spellcheck="false" autocomplete="off" />
+              <span class="hint">Example: <code>docker volume create --label {{ config.protect_label or 'prunemate.keep' }} db_data</code></span>
+            </div>
+            <div class="field">
+              <label for="min_age_hours">Minimum age (hours)</label>
+              <input type="number" id="min_age_hours" name="min_age_hours" min="0" max="87600" value="{{ config.min_age_hours or 0 }}" />
+              <span class="hint">Only prune resources older than this. 0 = no limit. Not applied to volumes (Docker has no age filter for them).</span>
             </div>
           </div>
-          <span id="hosts-arrow" style="font-size:1.05rem;transition:.2s;">▼</span>
-        </button>
+        </div>
+      </div>
 
-        <!-- Collapsible hosts panel -->
-        <div id="hosts-panel" style="overflow:hidden;">
-          <p style="color:var(--muted);font-size:0.9rem;margin:12px 0;">
-            Add external Docker hosts using <code style="background:rgba(14,165,233,0.08);padding:2px 6px;border-radius:4px;font-size:0.85rem;">tcp://host:2375</code>. <strong>This function requires a <a href="https://github.com/Tecnativa/docker-socket-proxy" target="_blank" style="color:#0ea5e9;text-decoration:none;">docker-socket-proxy</a> container running on each remote host.</strong> See the <a href="https://github.com/anoniemerd/PruneMate" target="_blank" style="color:#0ea5e9;text-decoration:none;">GitHub repo</a> for an example docker-compose.yaml for the docker-socket-proxy.
+      <!-- Docker hosts -->
+      <h2 class="section-title"><svg class="icon"><use href="#i-server"/></svg>Docker hosts</h2>
+      <details class="card collapsible" id="hosts-card">
+        <summary>
+          <span class="summary-main">
+            <svg class="icon icon-lg"><use href="#i-server"/></svg>
+            <span><strong>External Docker hosts</strong><span class="hint" id="hosts-summary">Connect remote hosts via a docker-socket-proxy</span></span>
+          </span>
+          <svg class="icon chev"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="collapsible-body">
+          <p class="hint">
+            Add hosts as <code>tcp://host:2375</code> (socket proxy) or <code>tcp://host:2376</code> with mutual TLS.
+            For TLS, mount certificates at <code>/certs/&lt;folder&gt;/{ca,cert,key}.pem</code> and enter the folder name.
+            Never expose a raw Docker socket; use a <a href="https://github.com/Tecnativa/docker-socket-proxy" target="_blank" rel="noopener noreferrer">docker-socket-proxy</a>.
           </p>
-          
-          <!-- Hosts List -->
-          <div id="hosts-list" style="margin-bottom:16px;">
-            <!-- Populated by JavaScript -->
-          </div>
-          
-          <!-- Add New Host Form -->
-          <div style="border-top:1px solid var(--card-border);padding-top:12px;margin-top:12px;">
-            <h3 style="font-size:0.9rem;margin-bottom:10px;color:var(--text);">Add New Host</h3>
-            <div style="display:grid;grid-template-columns:1fr 2fr auto;gap:10px;align-items:end;">
+          <div class="host-list" id="hosts-list"><div class="host-empty">Loading hosts…</div></div>
+
+          <div class="subsection">
+            <p class="subsection-title"><svg class="icon icon-sm"><use href="#i-plus"/></svg>Add host</p>
+            <div class="add-host" data-no-dirty>
               <div class="field">
                 <label for="new-host-name">Name</label>
-                <input type="text" id="new-host-name" name="new-host-name" placeholder="Server 1" style="width:100%;" />
+                <input type="text" id="new-host-name" placeholder="NAS" maxlength="64" autocomplete="off" />
               </div>
               <div class="field">
                 <label for="new-host-url">URL</label>
-                <input type="text" id="new-host-url" name="new-host-url" placeholder="tcp://192.168.1.10:2375" style="width:100%;" />
+                <input type="text" id="new-host-url" placeholder="tcp://192.168.1.10:2375" maxlength="512" autocomplete="off" spellcheck="false" />
               </div>
-              <button type="button" onclick="addNewHost()" class="btn btn-secondary" style="margin:0;">Add Host</button>
+              <div class="field">
+                <label for="new-host-tls">TLS folder <span class="muted">(optional)</span></label>
+                <input type="text" id="new-host-tls" placeholder="nas" maxlength="64" autocomplete="off" spellcheck="false" />
+              </div>
+              <button type="button" class="btn btn-secondary" data-action="add-host"><svg class="icon icon-sm"><use href="#i-plus"/></svg>Add</button>
             </div>
           </div>
         </div>
-      </div>
+      </details>
 
-      <!-- Notifications configuration section -->
-      <h2>Notifications</h2>
-      <!-- Collapsible notification settings card -->
-      <div class="card collapsed" id="notif-card">
-        <!-- Collapsible header button -->
-        <button type="button" id="notif-header" aria-expanded="false" aria-controls="notif-panel"
-          style="all:unset;display:flex;width:100%;cursor:pointer;align-items:center;justify-content:space-between;padding:4px 0 8px 0;">
-          <div style="display:flex;align-items:center;gap:10px;">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#9ca3af" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="flex-shrink:0;">
-              <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9"></path>
-              <path d="M10 21h4"></path>
-            </svg>
-            <div>
-              <strong>Notification settings</strong>
-              <div class="hint">Select provider & configure fields</div>
-            </div>
-          </div>
-          <span id="notif-arrow" style="font-size:1.05rem;transition:.2s;">▼</span>
-        </button>
-
-        <!-- Collapsible notification settings panel -->
-        <div id="notif-panel" style="overflow:hidden;">
-          <div class="row inline" style="margin-top:4px;">
-            <!-- Notification provider selector -->
-            <div class="field" style="flex:0 0 auto;min-width:150px;max-width:200px;">
-              <label for="notifications_provider">Provider</label><br/>
-              <select id="notifications_provider" name="notifications_provider" aria-label="Notification provider" style="width:100%;">
-                <option value="gotify" {% if config.notifications.provider == 'gotify' %}selected{% endif %}>Gotify</option>
-                <option value="ntfy" {% if config.notifications.provider == 'ntfy' %}selected{% endif %}>ntfy</option>
-                <option value="discord" {% if config.notifications.provider == 'discord' %}selected{% endif %}>Discord</option>
-                <option value="telegram" {% if config.notifications.provider == 'telegram' %}selected{% endif %}>Telegram</option>
+      <!-- Notifications -->
+      <h2 class="section-title"><svg class="icon"><use href="#i-bell"/></svg>Notifications</h2>
+      {% set n = config.notifications %}
+      <details class="card collapsible" id="notif-card">
+        <summary>
+          <span class="summary-main">
+            <svg class="icon icon-lg"><use href="#i-bell"/></svg>
+            <span><strong>Notification settings</strong><span class="hint">Select a provider and configure its fields</span></span>
+          </span>
+          <svg class="icon chev"><use href="#i-chevron"/></svg>
+        </summary>
+        <div class="collapsible-body">
+          <div class="grid-2">
+            <div class="field">
+              <label for="notifications_provider">Provider</label>
+              <select id="notifications_provider" name="notifications_provider">
+                <option value="gotify" {% if n.provider == 'gotify' %}selected{% endif %}>Gotify</option>
+                <option value="ntfy" {% if n.provider == 'ntfy' %}selected{% endif %}>ntfy</option>
+                <option value="discord" {% if n.provider == 'discord' %}selected{% endif %}>Discord</option>
+                <option value="telegram" {% if n.provider == 'telegram' %}selected{% endif %}>Telegram</option>
               </select>
             </div>
-            <!-- Notification priority selector -->
-            <div class="field" style="flex:0 0 auto;min-width:120px;">
-              <label for="notification_priority">Priority</label><br/>
-              <select 
-                id="notification_priority" 
-                name="notification_priority"
-                style="width: 100px;"
-                aria-label="Notification priority"
-              >
-                <option value="low" {% if config.notifications.priority == 'low' %}selected{% endif %}>Low</option>
-                <option value="medium" {% if config.notifications.priority == 'medium' %}selected{% endif %}>Medium</option>
-                <option value="high" {% if config.notifications.priority == 'high' %}selected{% endif %}>High</option>
+            <div class="field">
+              <label for="notification_priority">Priority</label>
+              <select id="notification_priority" name="notification_priority">
+                <option value="low" {% if n.priority == 'low' %}selected{% endif %}>Low</option>
+                <option value="medium" {% if n.priority == 'medium' %}selected{% endif %}>Medium</option>
+                <option value="high" {% if n.priority == 'high' %}selected{% endif %}>High</option>
               </select>
             </div>
           </div>
-          <!-- 'Only notify when changes' toggle (dynamically repositioned per provider) -->
-          <div id="only-on-changes-wrapper" style="margin-top:6px;">
-            <div class="toggle-row" style="padding:4px 0 0 0;">
-              <span class="label-text" id="only-on-changes-label">Only notify when something was pruned</span>
-              <label class="switch">
-                <input type="checkbox" name="notifications_only_on_changes" id="notifications_only_on_changes" aria-labelledby="only-on-changes-label" {% if config.notifications.only_on_changes %}checked{% endif %}>
-                <span class="slider"></span>
-              </label>
+
+          <div class="toggle-row">
+            <div class="toggle-text">
+              <span class="label-text" id="lbl-only-changes">Only notify when something was pruned</span>
+              <span class="hint">When disabled, PruneMate sends a notification after every run.</span>
             </div>
-            <div class="hint" style="margin:2px 0 14px 0; text-align:right;">*When disabled, PruneMate sends a notification after every run.</div>
+            <label class="switch"><input type="checkbox" name="notifications_only_on_changes" id="notifications_only_on_changes" aria-labelledby="lbl-only-changes" {% if n.only_on_changes %}checked{% endif %}><span class="slider"></span></label>
           </div>
 
-          <!-- Gotify specific fields -->
-          <div id="gotify-fields" style="margin-top:12px;">
-            <div class="toggle-row">
-              <span class="label-text" id="gotify-enable-label">Enable Gotify notifications</span>
-              <label class="switch">
-                <input type="checkbox" name="gotify_enabled" id="gotify_enabled" aria-labelledby="gotify-enable-label"
-                       {% if config.notifications.gotify.enabled %}checked{% endif %}>
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="gotify_url">Gotify URL :</label>
-                <input type="text" id="gotify_url" name="gotify_url"
-                       value="{{ config.notifications.gotify.url or '' }}"
-                       placeholder="https://gotify.example.com" aria-label="Gotify server URL">
-              </div>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="gotify_token">Gotify App Token :</label>
-                <input type="password" id="gotify_token" name="gotify_token" autocomplete="off"
-                       value="{{ config.notifications.gotify.token or '' }}"
-                       placeholder="App token" aria-label="Gotify application token">
-              </div>
-            </div>
-          </div>
-
-          <!-- ntfy specific fields -->
-          <div id="ntfy-fields" style="margin-top:12px;display:none;">
-            <div class="toggle-row">
-              <span class="label-text" id="ntfy-enable-label">Enable ntfy notifications</span>
-              <label class="switch">
-                <input type="checkbox" name="ntfy_enabled" id="ntfy_enabled" aria-labelledby="ntfy-enable-label"
-                       {% if config.notifications.ntfy.enabled %}checked{% endif %}>
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="ntfy_url">ntfy URL :</label>
-                <input type="text" id="ntfy_url" name="ntfy_url"
-                       value="{{ config.notifications.ntfy.url or '' }}"
-                       placeholder="https://ntfy.sh" aria-label="ntfy server URL">
-              </div>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="ntfy_topic">ntfy Topic :</label>
-                <input type="text" id="ntfy_topic" name="ntfy_topic"
-                       value="{{ config.notifications.ntfy.topic or '' }}"
-                       placeholder="topic/name" aria-label="ntfy topic name">
-              </div>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="ntfy_token">ntfy Token (optional) :</label>
-                <input type="password" id="ntfy_token" name="ntfy_token"
-                       value="{{ config.notifications.ntfy.token or '' }}"
-                       placeholder="Bearer token (optional)" aria-label="ntfy bearer token">
-              </div>
-            </div>
-          </div>
-
-          <!-- Discord specific fields -->
-          <div id="discord-fields" style="margin-top:12px;display:none;">
-            <div class="toggle-row">
-              <span class="label-text" id="discord-enable-label">Enable Discord notifications</span>
-              <label class="switch">
-                <input type="checkbox" name="discord_enabled" id="discord_enabled" aria-labelledby="discord-enable-label"
-                       {% if config.notifications.discord.enabled %}checked{% endif %}>
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="discord_webhook_url">Discord Webhook URL :</label>
-                <input type="text" id="discord_webhook_url" name="discord_webhook_url"
-                       value="{{ config.notifications.discord.webhook_url or '' }}"
-                       placeholder="https://discord.com/api/webhooks/..." aria-label="Discord webhook URL">
-              </div>
-            </div>
-          </div>
-
-          <!-- Telegram specific fields -->
-          <div id="telegram-fields" style="margin-top:12px;display:none;">
-            <div class="toggle-row">
-              <span class="label-text" id="telegram-enable-label">Enable Telegram notifications</span>
-              <label class="switch">
-                <input type="checkbox" name="telegram_enabled" id="telegram_enabled" aria-labelledby="telegram-enable-label"
-                       {% if config.notifications.telegram.enabled %}checked{% endif %}>
-                <span class="slider"></span>
-              </label>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="telegram_bot_token">Bot Token :</label>
-                <input type="password" id="telegram_bot_token" name="telegram_bot_token" autocomplete="off"
-                       value="{{ config.notifications.telegram.bot_token or '' }}"
-                       placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11" aria-label="Telegram bot token from @BotFather">
-              </div>
-            </div>
-            <div class="row" style="margin-top:6px;">
-              <div style="flex:1;">
-                <label for="telegram_chat_id">Chat ID :</label>
-                <input type="text" id="telegram_chat_id" name="telegram_chat_id"
-                       value="{{ config.notifications.telegram.chat_id or '' }}"
-                       placeholder="123456789 or @channelname" aria-label="Telegram chat ID or channel username">
-              </div>
-            </div>
-          </div>
-
-          <!-- Test notification button -->
-          <div style="margin-top:12px;">
-            <button type="submit"
-                    class="btn btn-secondary"
-                    formaction="{{ url_for('test_notification') }}"
-                    formmethod="post">
-              Send test notification
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Save and schedule button -->
-      <div style="margin-top: 10px;">
-        <button type="submit" class="btn btn-primary">
-          Save &amp; Schedule
-        </button>
-      </div>
-    </form>
-
-    <!-- Manual prune trigger form -->
-    <form method="post" action="{{ url_for('run_now') }}" style="margin-top: 6px; display: none;" id="old-run-form" onsubmit="setTimeout(loadStats, 1000);">
-      <button type="submit" class="btn btn-secondary">
-        Run now
-      </button>
-    </form>
-
-    <!-- Manual prune with preview -->
-    <div style="margin-top: 6px;">
-      <button type="button" class="btn btn-secondary" onclick="showPrunePreview()">
-        Preview & Run
-      </button>
-    </div>
-
-    <!-- Application footer -->
-    <div class="footer">
-      PruneMate · 2026 · V1.4.0 · 
-      <a href="https://github.com/anoniemerd/PruneMate" target="_blank">GitHub</a> ·
-      <a href="https://prunemate.org" target="_blank">Prunemate.org</a>
-    </div>
-  </div>
-
-  <!-- Prune Preview Modal -->
-  <div id="prunePreviewModal" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.85); backdrop-filter: blur(6px); z-index: 1000; overflow-y: auto; padding: 20px;">
-    <div style="max-width: 900px; margin: 40px auto; background: linear-gradient(180deg, rgba(18,25,44,0.98), rgba(8,12,22,0.98)); border-radius: 24px; padding: 28px; border: 1px solid rgba(148,163,184,0.15); box-shadow: 0 32px 70px rgba(0,0,0,0.75);">
-      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-        <h2 style="margin: 0; font-size: 1.5rem; color: var(--text);">🔍 Prune Preview</h2>
-        <button onclick="closePrunePreview()" style="background: none; border: none; color: var(--muted); font-size: 1.5rem; cursor: pointer; padding: 0; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center; border-radius: 8px; transition: all 0.2s;">&times;</button>
-      </div>
-      
-      <div id="previewContent" style="min-height: 200px;">
-        <div style="text-align: center; padding: 40px; color: var(--muted);">
-          <div style="font-size: 2rem; margin-bottom: 12px;">⏳</div>
-          <p>Loading preview...</p>
-        </div>
-      </div>
-      
-      <div id="previewActions" style="display: flex; flex-direction: row; margin-top: 24px; padding-top: 20px; border-top: 1px solid rgba(148,163,184,0.1); gap: 12px; justify-content: flex-end; visibility: hidden;">
-        <button onclick="closePrunePreview()" class="btn" style="background: rgba(148,163,184,0.08); color: var(--text);">Cancel</button>
-        <button onclick="executeConfirmedPrune()" class="btn btn-secondary" id="confirmPruneBtn" style="display: none;">
-          ✓ Confirm & Execute
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <script>
-    // Show appropriate day selector (week/month) or placeholder based on frequency
-    function updateScheduleVisibility() {
-      const freq = document.getElementById('frequency').value;
-      const weekRow = document.getElementById('week-row');
-      const monthRow = document.getElementById('month-row');
-      const placeholder = document.getElementById('schedule-placeholder');
-
-      if(freq === 'weekly'){
-        weekRow.style.display = 'flex';
-        monthRow.style.display = 'none';
-        placeholder.style.display = 'none';
-      } else if(freq === 'monthly'){
-        weekRow.style.display = 'none';
-        monthRow.style.display = 'flex';
-        placeholder.style.display = 'none';
-      } else { // daily
-        weekRow.style.display = 'none';
-        monthRow.style.display = 'none';
-        placeholder.style.display = 'flex';
-      }
-    }
-
-    // Clamp day_of_month input to valid range (1–31)
-    function initDayOfMonthClamp(){
-      const domInput = document.getElementById('day_of_month');
-      if (!domInput) return;
-      // Validate and clamp day value
-      const clamp = () => {
-        const v = domInput.value.trim();
-        if (v === '') return;
-        let n = parseInt(v, 10);
-        if (Number.isNaN(n)) { domInput.value = 1; return; }
-        if (n < 1) n = 1;
-        if (n > 31) n = 31;
-        if (String(n) !== domInput.value) domInput.value = n;
-      };
-      // Live validation while typing
-      domInput.addEventListener('input', () => {
-        const v = domInput.value;
-        const n = parseInt(v, 10);
-        if (!Number.isNaN(n) && (n < 1 || n > 31)) {
-          domInput.value = Math.max(1, Math.min(31, n));
-        }
-      });
-      // Final validation when input loses focus
-      domInput.addEventListener('blur', clamp);
-      clamp();
-    }
-
-    // Clamp time hour/minute inputs for 12h format
-    function initTimeClamp(){
-      const hourInput = document.getElementById('time-hour');
-      const minuteInput = document.getElementById('time-minute');
-      if (!hourInput || !minuteInput) return;
-      
-      // Hour: 1-12, max 2 digits
-      const clampHour = () => {
-        let v = hourInput.value.trim();
-        if (v === '') return;
-        // Limit to 2 digits
-        if (v.length > 2) v = v.slice(0, 2);
-        let n = parseInt(v, 10);
-        if (Number.isNaN(n)) { hourInput.value = 12; return; }
-        if (n < 1) n = 1;
-        if (n > 12) n = 12;
-        hourInput.value = n;
-      };
-      // Limit hour input length and validate range while typing
-      hourInput.addEventListener('input', () => {
-        let v = hourInput.value;
-        if (v.length > 2) {
-          hourInput.value = v.slice(0, 2);
-          v = hourInput.value;
-        }
-        const n = parseInt(v, 10);
-        if (!Number.isNaN(n) && (n < 1 || n > 12)) {
-          hourInput.value = Math.max(1, Math.min(12, n));
-        }
-      });
-      // Final hour validation when input loses focus
-      hourInput.addEventListener('blur', clampHour);
-      
-      // Minute: 0-59, max 2 digits
-      const clampMinute = () => {
-        let v = minuteInput.value.trim();
-        if (v === '') { minuteInput.value = '00'; return; }
-        // Limit to 2 digits
-        if (v.length > 2) v = v.slice(0, 2);
-        let n = parseInt(v, 10);
-        if (Number.isNaN(n)) { minuteInput.value = '00'; return; }
-        if (n < 0) n = 0;
-        if (n > 59) n = 59;
-        minuteInput.value = String(n).padStart(2, '0');
-      };
-      // Limit minute input length and validate range while typing
-      minuteInput.addEventListener('input', () => {
-        let v = minuteInput.value;
-        if (v.length > 2) {
-          minuteInput.value = v.slice(0, 2);
-          v = minuteInput.value;
-        }
-        const n = parseInt(v, 10);
-        if (!Number.isNaN(n) && (n < 0 || n > 59)) {
-          minuteInput.value = String(Math.max(0, Math.min(59, n))).padStart(2, '0');
-        }
-      });
-      // Final minute validation when input loses focus
-      minuteInput.addEventListener('blur', clampMinute);
-      
-      // Initialize values on load
-      clampHour();
-      clampMinute();
-    }
-
-    // Display and auto-hide flash message toast
-    (function initToast() {
-      try {
-        const toast = document.getElementById('toast');
-        if (!toast) return;
-        const msg = toast.dataset.message || '';
-        const textEl = document.getElementById('toast-text');
-        const closeBtn = document.getElementById('toast-close');
-
-        // Exit early if no message to display
-        if (!msg) {
-          toast.classList.remove('show');
-          return;
-        }
-
-        // Display toast with animation
-        textEl.textContent = msg;
-        requestAnimationFrame(() => toast.classList.add('show'));
-
-        // Auto-hide after 5 seconds & Hide toast notification
-        const hide = () => toast.classList.remove('show');
-        const timer = setTimeout(hide, 5000);
-
-        // Manual close button handler
-        closeBtn.addEventListener('click', () => {
-          clearTimeout(timer);
-          hide();
-        });
-
-        // Close toast when Escape key is pressed
-        document.addEventListener('keydown', (e) => {
-          if (e.key === 'Escape') {
-            clearTimeout(timer);
-            hide();
-          }
-        }, { once: true });
-      } catch (e) {
-        console.warn('Toast init failed', e);
-      }
-    })();
-
-    // Show fields for the selected notification provider
-    function updateNotifUI(){
-      const prov = document.getElementById('notifications_provider').value;
-      const gotifyBlock = document.getElementById('gotify-fields');
-      const ntfyBlock = document.getElementById('ntfy-fields');
-      const discordBlock = document.getElementById('discord-fields');
-      const telegramBlock = document.getElementById('telegram-fields');
-      const toggleWrapper = document.getElementById('only-on-changes-wrapper');
-      if(!gotifyBlock || !ntfyBlock || !discordBlock || !telegramBlock || !toggleWrapper) return;
-      // Show Gotify fields and position toggle
-      if(prov === 'gotify'){
-        gotifyBlock.style.display = 'block';
-        ntfyBlock.style.display = 'none';
-        discordBlock.style.display = 'none';
-        telegramBlock.style.display = 'none';
-        if(gotifyBlock.firstElementChild){
-          gotifyBlock.insertBefore(toggleWrapper, gotifyBlock.firstElementChild.nextSibling);
-        } else {
-          gotifyBlock.appendChild(toggleWrapper);
-        }
-      // Show ntfy fields and position toggle
-      } else if(prov === 'ntfy'){
-        gotifyBlock.style.display = 'none';
-        ntfyBlock.style.display = 'block';
-        discordBlock.style.display = 'none';
-        telegramBlock.style.display = 'none';
-        if(ntfyBlock.firstElementChild){
-          ntfyBlock.insertBefore(toggleWrapper, ntfyBlock.firstElementChild.nextSibling);
-        } else {
-          ntfyBlock.appendChild(toggleWrapper);
-        }
-      // Show Discord fields and position toggle
-      } else if(prov === 'discord'){
-        gotifyBlock.style.display = 'none';
-        ntfyBlock.style.display = 'none';
-        discordBlock.style.display = 'block';
-        telegramBlock.style.display = 'none';
-        if(discordBlock.firstElementChild){
-          discordBlock.insertBefore(toggleWrapper, discordBlock.firstElementChild.nextSibling);
-        } else {
-          discordBlock.appendChild(toggleWrapper);
-        }
-      // Show Telegram fields and position toggle
-      } else if(prov === 'telegram'){
-        gotifyBlock.style.display = 'none';
-        ntfyBlock.style.display = 'none';
-        discordBlock.style.display = 'none';
-        telegramBlock.style.display = 'block';
-        if(telegramBlock.firstElementChild){
-          telegramBlock.insertBefore(toggleWrapper, telegramBlock.firstElementChild.nextSibling);
-        } else {
-          telegramBlock.appendChild(toggleWrapper);
-        }
-      }
-    }
-
-    // Manage collapsible notification settings panel
-    function initNotificationCollapse(){
-      const notifCard = document.getElementById('notif-card');
-      const notifHeader = document.getElementById('notif-header');
-      const notifPanel = document.getElementById('notif-panel');
-      const notifArrow = document.getElementById('notif-arrow');
-      if(!notifCard || !notifHeader || !notifPanel) return;
-      // Toggle notification panel open/closed
-      function setNotif(open){
-        if(open){
-          notifCard.classList.remove('collapsed');
-          // Use scrollHeight for smooth transition
-          notifPanel.style.maxHeight = notifPanel.scrollHeight + 40 + 'px';
-          notifHeader.setAttribute('aria-expanded','true');
-        } else {
-          notifCard.classList.add('collapsed');
-          notifPanel.style.maxHeight = '0px';
-          notifHeader.setAttribute('aria-expanded','false');
-        }
-      }
-      // Start with panel collapsed
-      setNotif(false);
-      notifHeader.addEventListener('click', () => {
-        // Toggle panel state on click
-        const isOpen = notifHeader.getAttribute('aria-expanded') === 'true';
-        setNotif(!isOpen);
-      });
-    }
-
-    // Load and display all-time statistics
-    function loadStats(){
-      const loading = document.getElementById('stats-loading');
-      const content = document.getElementById('stats-content');
-      const error = document.getElementById('stats-error');
-      
-      fetch('/stats')
-        .then(response => {
-          if (!response.ok) throw new Error('Failed to fetch stats');
-          return response.json();
-        })
-        .then(data => {
-          // Hide loading, show content
-          loading.style.display = 'none';
-          content.style.display = 'block';
-          error.style.display = 'none';
-          
-          // Helper to format bytes to human-readable format
-          function formatBytes(bytes) {
-            if (bytes === 0) return '0 B';
-            const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            let num = bytes;
-            let unitIndex = 0;
-            while (num >= 1024 && unitIndex < units.length - 1) {
-              num /= 1024;
-              unitIndex++;
-            }
-            return num.toFixed(1) + ' ' + units[unitIndex];
-          }
-          
-          // Helper to format date
-          function formatDate(isoString) {
-            if (!isoString) return '-';
-            try {
-              const date = new Date(isoString);
-              if (isNaN(date.getTime())) return '-';
-              
-              // Format: DD-MM-YYYY HH:MM (24h) or DD-MM-YYYY h:MM AM/PM (12h)
-              const day = String(date.getDate()).padStart(2, '0');
-              const month = String(date.getMonth() + 1).padStart(2, '0');
-              const year = date.getFullYear();
-              const mins = String(date.getMinutes()).padStart(2, '0');
-              
-              {% if use_24h %}
-              // 24-hour format
-              const hoursFormatted = String(date.getHours()).padStart(2, '0');
-              return `${day}-${month}-${year} ${hoursFormatted}:${mins}`;
-              {% else %}
-              // 12-hour format with AM/PM
-              const rawHrs = date.getHours();
-              const period = rawHrs >= 12 ? 'PM' : 'AM';
-              const hoursFormatted = rawHrs % 12 || 12;
-              return `${day}-${month}-${year} ${hoursFormatted}:${mins} ${period}`;
+          {% macro secret_input(field, label, placeholder, is_set, autocomplete='off') %}
+          <div class="field">
+            <label for="{{ field }}">{{ label }}</label>
+            <div class="secret-wrap">
+              <input type="password" id="{{ field }}" name="{{ field }}" value="" autocomplete="{{ autocomplete }}" spellcheck="false"
+                     placeholder="{{ 'Saved – leave empty to keep' if is_set else placeholder }}" data-secret />
+              <input type="hidden" name="{{ field }}_clear" value="0" />
+              {% if is_set %}
+              <button type="button" class="btn btn-ghost btn-sm" data-action="clear-secret" data-field="{{ field }}">Remove</button>
               {% endif %}
-            } catch (e) {
-              return '-';
-            }
-          }
-          
-          // Update all stat displays
-          document.getElementById('stats-space').textContent = formatBytes(data.total_space_reclaimed || 0);
-          document.getElementById('stats-runs').textContent = data.prune_runs || 0;
-          document.getElementById('stats-containers').textContent = data.containers_deleted || 0;
-          document.getElementById('stats-images').textContent = data.images_deleted || 0;
-          document.getElementById('stats-networks').textContent = data.networks_deleted || 0;
-          document.getElementById('stats-volumes').textContent = data.volumes_deleted || 0;
-          document.getElementById('stats-build-cache').textContent = data.build_cache_deleted || 0;
-          document.getElementById('stats-first').textContent = formatDate(data.first_run);
-          document.getElementById('stats-last').textContent = formatDate(data.last_run);
-        })
-        .catch(err => {
-          console.error('Error loading stats:', err);
-          loading.style.display = 'none';
-          content.style.display = 'none';
-          error.style.display = 'block';
-        });
-    }
+            </div>
+            <span class="secret-state {{ 'saved' if is_set else '' }}" data-secret-state="{{ field }}">
+              {% if is_set %}<svg class="icon icon-sm"><use href="#i-lock"/></svg>Stored securely, not shown{% else %}Not set{% endif %}
+            </span>
+          </div>
+          {% endmacro %}
 
-    let hostStatusCheckInProgress = false;
+          <!-- Gotify -->
+          <div class="stack provider-fields" data-provider="gotify">
+            <div class="toggle-row">
+              <span class="label-text" id="lbl-gotify">Enable Gotify notifications</span>
+              <label class="switch"><input type="checkbox" name="gotify_enabled" id="gotify_enabled" aria-labelledby="lbl-gotify" {% if n.gotify.enabled %}checked{% endif %}><span class="slider"></span></label>
+            </div>
+            <div class="field">
+              <label for="gotify_url">Gotify URL</label>
+              <input type="text" id="gotify_url" name="gotify_url" value="{{ n.gotify.url or '' }}" placeholder="https://gotify.example.com" spellcheck="false" />
+            </div>
+            {{ secret_input('gotify_token', 'App token', 'App token', secret_state.gotify_token) }}
+          </div>
 
-    function refreshHostStatuses(){
-      const statusDots = Array.from(document.querySelectorAll('#hosts-list .host-status-dot'));
-      if (!statusDots.length || hostStatusCheckInProgress) return;
+          <!-- ntfy -->
+          <div class="stack provider-fields" data-provider="ntfy" hidden>
+            <div class="toggle-row">
+              <span class="label-text" id="lbl-ntfy">Enable ntfy notifications</span>
+              <label class="switch"><input type="checkbox" name="ntfy_enabled" id="ntfy_enabled" aria-labelledby="lbl-ntfy" {% if n.ntfy.enabled %}checked{% endif %}><span class="slider"></span></label>
+            </div>
+            <div class="field">
+              <label for="ntfy_url">ntfy URL</label>
+              <input type="text" id="ntfy_url" name="ntfy_url" value="{{ ntfy_url_display }}" placeholder="https://ntfy.sh" spellcheck="false" />
+              <span class="hint">Basic auth via <code>https://user:pass@host</code> is supported; the password is masked here.</span>
+            </div>
+            <div class="field">
+              <label for="ntfy_topic">Topic</label>
+              <input type="text" id="ntfy_topic" name="ntfy_topic" value="{{ n.ntfy.topic or '' }}" placeholder="prunemate" spellcheck="false" />
+            </div>
+            {{ secret_input('ntfy_token', 'Access token (optional)', 'Bearer token (optional)', secret_state.ntfy_token) }}
+          </div>
 
-      hostStatusCheckInProgress = true;
-      const dotsByIndex = new Map(statusDots.map(dot => [Number(dot.dataset.hostIndex), dot]));
+          <!-- Discord -->
+          <div class="stack provider-fields" data-provider="discord" hidden>
+            <div class="toggle-row">
+              <span class="label-text" id="lbl-discord">Enable Discord notifications</span>
+              <label class="switch"><input type="checkbox" name="discord_enabled" id="discord_enabled" aria-labelledby="lbl-discord" {% if n.discord.enabled %}checked{% endif %}><span class="slider"></span></label>
+            </div>
+            {{ secret_input('discord_webhook_url', 'Webhook URL', 'https://discord.com/api/webhooks/...', secret_state.discord_webhook_url) }}
+          </div>
 
-      fetch('/hosts/status')
-        .then(response => {
-          if (!response.ok) throw new Error('Failed to check Docker hosts');
-          return response.json();
-        })
-        .then(data => {
-          const statusStyles = {
-            online: { color: '#22c55e', title: 'Online' },
-            offline: { color: '#ef4444', title: 'Offline: Docker ping failed' },
-            disabled: { color: '#6b7280', title: 'Disabled' }
-          };
+          <!-- Telegram -->
+          <div class="stack provider-fields" data-provider="telegram" hidden>
+            <div class="toggle-row">
+              <span class="label-text" id="lbl-telegram">Enable Telegram notifications</span>
+              <label class="switch"><input type="checkbox" name="telegram_enabled" id="telegram_enabled" aria-labelledby="lbl-telegram" {% if n.telegram.enabled %}checked{% endif %}><span class="slider"></span></label>
+            </div>
+            {{ secret_input('telegram_bot_token', 'Bot token', '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11', secret_state.telegram_bot_token) }}
+            <div class="field">
+              <label for="telegram_chat_id">Chat ID</label>
+              <input type="text" id="telegram_chat_id" name="telegram_chat_id" value="{{ n.telegram.chat_id or '' }}" placeholder="123456789 or @channelname" spellcheck="false" />
+            </div>
+          </div>
 
-          (data.statuses || []).forEach(hostStatus => {
-            const dot = dotsByIndex.get(hostStatus.index);
-            const style = statusStyles[hostStatus.status];
-            if (!dot || !dot.isConnected || !style) return;
-            dot.style.backgroundColor = style.color;
-            dot.title = style.title;
-          });
-        })
-        .catch(() => {
-          statusDots.forEach(dot => {
-            if (dot.isConnected && dot.dataset.enabled === 'true') {
-              dot.style.backgroundColor = '#f59e0b';
-              dot.title = 'Status unavailable';
-            }
-          });
-        })
-        .finally(() => {
-          hostStatusCheckInProgress = false;
-        });
-    }
+          <div class="stack">
+            <div><button type="button" class="btn btn-secondary" data-action="test-notification"><svg class="icon icon-sm"><use href="#i-bell"/></svg>Save &amp; send test notification</button></div>
+          </div>
+        </div>
+      </details>
+    </form>
 
-    // Load and display Docker hosts
-    function loadHosts(){
-      const hostsList = document.getElementById('hosts-list');
-      if (!hostsList) return;
-      
-      fetch('/hosts')
-        .then(response => {
-          if (!response.ok) throw new Error('Failed to fetch hosts');
-          return response.json();
-        })
-        .then(data => {
-          const hosts = data.hosts || [];
-          
-          // Filter out Local host - it's always connected automatically
-          const externalHosts = hosts.filter(host => host.name !== 'Local' && !host.url.includes('unix://'));
+    <footer class="footer">
+      PruneMate · {{ current_year }} · v{{ app_version }} ·
+      <a href="https://github.com/anoniemerd/PruneMate" target="_blank" rel="noopener noreferrer">GitHub</a> ·
+      <a href="https://prunemate.org" target="_blank" rel="noopener noreferrer">prunemate.org</a>
+    </footer>
+  </main>
 
-          hostsList.innerHTML = '';
-          
-          externalHosts.forEach((host, displayIndex) => {
-            // Calculate correct index for API calls (external hosts are in docker_hosts array, not including Local)
-            // The API expects index in docker_hosts, so we need index of external host, not full hosts array
-            const originalIndex = displayIndex;
-            
-            const hostDiv = document.createElement('div');
-            hostDiv.style.cssText = 'display:flex;align-items:center;gap:10px;padding:10px;background:rgba(14,165,233,0.04);border:1px solid var(--card-border);border-radius:10px;margin-bottom:8px;';
-            
-            // Host status indicator
-            const statusDot = document.createElement('div');
-            statusDot.className = 'host-status-dot';
-            statusDot.dataset.hostIndex = String(originalIndex);
-            statusDot.dataset.enabled = String(Boolean(host.enabled));
-            statusDot.style.cssText = `width:10px;height:10px;border-radius:50%;flex-shrink:0;background:${host.enabled ? '#f59e0b' : '#6b7280'};`;
-            statusDot.title = host.enabled ? 'Checking Docker connection...' : 'Disabled';
-            
-            // Host info
-            const infoDiv = document.createElement('div');
-            infoDiv.style.cssText = 'flex:1;min-width:0;';
-            
-            const nameSpan = document.createElement('div');
-            nameSpan.style.cssText = 'font-weight:600;color:var(--text);font-size:0.95rem;margin-bottom:2px;';
-            nameSpan.textContent = host.name;
-            
-            const urlSpan = document.createElement('div');
-            urlSpan.style.cssText = 'font-size:0.85rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
-            urlSpan.textContent = host.url;
-            
-            infoDiv.appendChild(nameSpan);
-            infoDiv.appendChild(urlSpan);
-            
-            // Action buttons container
-            const actionsDiv = document.createElement('div');
-            actionsDiv.style.cssText = 'display:flex;gap:6px;flex-shrink:0;';
-            
-            // Toggle button
-            const toggleBtn = document.createElement('button');
-            toggleBtn.type = 'button';
-            toggleBtn.innerHTML = host.enabled ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>' : '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>';
-            toggleBtn.title = host.enabled ? 'Disable' : 'Enable';
-            toggleBtn.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:8px;border:1px solid var(--card-border);background:rgba(14,165,233,0.06);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.9rem;transition:all 0.2s;';
-            toggleBtn.onmouseover = () => toggleBtn.style.background = 'rgba(14,165,233,0.12)';
-            toggleBtn.onmouseout = () => toggleBtn.style.background = 'rgba(14,165,233,0.06)';
-            toggleBtn.onclick = () => toggleHost(originalIndex);
-            
-            // Edit button
-            const editBtn = document.createElement('button');
-            editBtn.type = 'button';
-            editBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>';
-            editBtn.title = 'Edit';
-            editBtn.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:8px;border:1px solid var(--card-border);background:rgba(251,191,36,0.06);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.9rem;transition:all 0.2s;';
-            editBtn.onmouseover = () => editBtn.style.background = 'rgba(251,191,36,0.12)';
-            editBtn.onmouseout = () => editBtn.style.background = 'rgba(251,191,36,0.06)';
-            editBtn.onclick = () => editHost(originalIndex, host);
-            
-            // Delete button (always show for external hosts)
-            const deleteBtn = document.createElement('button');
-            deleteBtn.type = 'button';
-            deleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>';
-            deleteBtn.title = 'Delete';
-            deleteBtn.style.cssText = 'display:flex;align-items:center;justify-content:center;padding:8px;border:1px solid var(--card-border);background:rgba(239,68,68,0.06);color:var(--text);border-radius:6px;cursor:pointer;font-size:0.9rem;transition:all 0.2s;';
-            deleteBtn.onmouseover = () => deleteBtn.style.background = 'rgba(239,68,68,0.12)';
-            deleteBtn.onmouseout = () => deleteBtn.style.background = 'rgba(239,68,68,0.06)';
-            deleteBtn.onclick = () => deleteHost(originalIndex, host.name);
-            actionsDiv.appendChild(deleteBtn);
-            
-            actionsDiv.appendChild(toggleBtn);
-            actionsDiv.appendChild(editBtn);
-            
-            hostDiv.appendChild(statusDot);
-            hostDiv.appendChild(infoDiv);
-            hostDiv.appendChild(actionsDiv);
-            
-            hostsList.appendChild(hostDiv);
-          });
+  <!-- Sticky action bar -->
+  <div class="savebar" id="savebar">
+    <div class="save-status" id="save-status" role="status"><span class="dot"></span><span id="save-status-text">All changes saved</span></div>
+    <div class="savebar-actions">
+      <button type="button" class="btn btn-ghost" data-action="discard" id="discard-btn" hidden>Discard</button>
+      <button type="button" class="btn btn-secondary" data-action="preview"><svg class="icon icon-sm"><use href="#i-eye"/></svg>Preview &amp; run</button>
+      <button type="submit" class="btn btn-primary" form="settings-form" id="save-btn" disabled><svg class="icon icon-sm"><use href="#i-check"/></svg>Save</button>
+    </div>
+  </div>
 
-          refreshHostStatuses();
-        })
-        .catch(err => {
-          console.error('Error loading hosts:', err);
-          hostsList.innerHTML = '<div style="color:#f87171;font-size:0.9rem;padding:8px;">Failed to load hosts</div>';
-        });
-    }
+  <!-- Prune preview dialog -->
+  <dialog class="modal" id="preview-dialog" aria-labelledby="preview-title">
+    <div class="modal-inner">
+      <div class="modal-head">
+        <h2 id="preview-title"><svg class="icon"><use href="#i-eye"/></svg>Prune preview</h2>
+        <button type="button" class="icon-btn" data-close title="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="modal-body" id="preview-body"></div>
+      <div class="modal-foot" id="preview-foot">
+        <div class="confirm-input" id="volume-confirm" hidden>
+          <label for="volume-confirm-input">Volumes will be deleted. Type <strong>DELETE</strong> to confirm:</label>
+          <input type="text" id="volume-confirm-input" autocomplete="off" spellcheck="false" placeholder="DELETE" />
+        </div>
+        <span class="spacer"></span>
+        <button type="button" class="btn btn-secondary" data-close id="preview-cancel">Cancel</button>
+        <button type="button" class="btn btn-primary" id="preview-confirm" hidden><svg class="icon icon-sm"><use href="#i-play"/></svg>Confirm &amp; run</button>
+      </div>
+    </div>
+  </dialog>
 
-    // Toggle host enabled/disabled status
-    function toggleHost(index){
-      fetch(`/hosts/${index}/toggle`, { method: 'POST' })
-        .then(response => response.json())
-        .then(data => {
-          if (data.success) {
-            loadHosts();
-            // Auto-save config after toggle
-            const mainForm = document.querySelector('form[action="{{ url_for("update") }}"]');
-            if (mainForm) {
-              // Create hidden input to track that this is an auto-save
-              const autoSaveInput = document.createElement('input');
-              autoSaveInput.type = 'hidden';
-              autoSaveInput.name = 'auto_save';
-              autoSaveInput.value = '1';
-              mainForm.appendChild(autoSaveInput);
-              mainForm.submit();
-            }
-          } else {
-            alert('Failed to toggle host: ' + (data.error || 'Unknown error'));
-          }
-        })
-        .catch(err => {
-          console.error('Error toggling host:', err);
-          alert('Failed to toggle host');
-        });
-    }
+  <!-- Generic confirm dialog -->
+  <dialog class="modal small" id="confirm-dialog" aria-labelledby="confirm-title">
+    <div class="modal-inner">
+      <div class="modal-head"><h2 id="confirm-title">Are you sure?</h2></div>
+      <div class="modal-body"><p class="modal-message" id="confirm-message"></p></div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-secondary" id="confirm-cancel">Cancel</button>
+        <button type="button" class="btn btn-danger" id="confirm-ok">Confirm</button>
+      </div>
+    </div>
+  </dialog>
 
-    // Edit host (prompt for new values) - Config auto-saves after update
-    function editHost(index, host){
-      const newName = prompt('Host name:', host.name);
-      if (newName === null) return; // User cancelled
-      
-      const newUrl = prompt('Host URL:', host.url);
-      if (newUrl === null) return; // User cancelled
-      
-      // Only submit if at least one value changed
-      if (newName === host.name && newUrl === host.url) return;
-      
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = `/hosts/${index}/update`;
-      form.innerHTML = `
-        <input type="hidden" name="name" value="${newName.replace(/"/g, '&quot;')}">
-        <input type="hidden" name="url" value="${newUrl.replace(/"/g, '&quot;')}">
-        <input type="hidden" name="enabled" value="${host.enabled ? 'on' : ''}">
-        <input type="hidden" name="auto_save" value="1">
-      `;
-      document.body.appendChild(form);
-      form.submit();
-      // Clean up form element (though page will reload)
-      setTimeout(() => form.remove(), 100);
-    }
+  <!-- Edit host dialog -->
+  <dialog class="modal small" id="host-dialog" aria-labelledby="host-dialog-title">
+    <form class="modal-inner" id="host-form" method="dialog">
+      <div class="modal-head">
+        <h2 id="host-dialog-title"><svg class="icon"><use href="#i-server"/></svg>Edit host</h2>
+        <button type="button" class="icon-btn" data-close title="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="modal-body stack">
+        <div class="field"><label for="edit-host-name">Name</label><input type="text" id="edit-host-name" maxlength="64" required autocomplete="off" /></div>
+        <div class="field"><label for="edit-host-url">URL</label><input type="text" id="edit-host-url" maxlength="512" required autocomplete="off" spellcheck="false" /></div>
+        <div class="field"><label for="edit-host-tls">TLS folder <span class="muted">(optional)</span></label><input type="text" id="edit-host-tls" maxlength="64" autocomplete="off" spellcheck="false" /></div>
+      </div>
+      <div class="modal-foot">
+        <button type="button" class="btn btn-secondary" data-close>Cancel</button>
+        <button type="submit" class="btn btn-primary"><svg class="icon icon-sm"><use href="#i-check"/></svg>Save host</button>
+      </div>
+    </form>
+  </dialog>
 
-    // Delete host with confirmation - Config auto-saves after deletion
-    function deleteHost(index, hostName){
-      if (!confirm(`Are you sure you want to delete host "${hostName}"?`)) return;
-      
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = `/hosts/${index}/delete`;
-      form.innerHTML = '<input type="hidden" name="auto_save" value="1">';
-      document.body.appendChild(form);
-      form.submit();
-      // Clean up form element (though page will reload)
-      setTimeout(() => form.remove(), 100);
-    }
-
-    // Add new host from the form - Config auto-saves after adding
-    function addNewHost(){
-      const nameInput = document.getElementById('new-host-name');
-      const urlInput = document.getElementById('new-host-url');
-      
-      const name = nameInput.value.trim();
-      const url = urlInput.value.trim();
-      
-      if (!name || !url) {
-        alert('Please enter both host name and URL');
-        return;
-      }
-      
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = '/hosts/add';
-      form.innerHTML = `
-        <input type="hidden" name="name" value="${name.replace(/"/g, '&quot;')}">
-        <input type="hidden" name="url" value="${url.replace(/"/g, '&quot;')}">
-        <input type="hidden" name="enabled" value="on">
-        <input type="hidden" name="auto_save" value="1">
-      `;
-      document.body.appendChild(form);
-      form.submit();
-      // Clean up form element and clear inputs (though page will reload)
-      setTimeout(() => form.remove(), 100);
-      nameInput.value = '';
-      urlInput.value = '';
-    }
-
-    // Manage collapsible Docker hosts panel
-    function initHostsCollapse(){
-      const hostsCard = document.getElementById('hosts-card');
-      const hostsHeader = document.getElementById('hosts-header');
-      const hostsPanel = document.getElementById('hosts-panel');
-      const hostsArrow = document.getElementById('hosts-arrow');
-      if(!hostsCard || !hostsHeader || !hostsPanel) return;
-      
-      // Toggle hosts panel open/closed
-      function setHosts(open){
-        if(open){
-          hostsCard.classList.remove('collapsed');
-          // Use scrollHeight for smooth transition
-          hostsPanel.style.maxHeight = hostsPanel.scrollHeight + 20 + 'px';
-          hostsHeader.setAttribute('aria-expanded','true');
-        } else {
-          hostsCard.classList.add('collapsed');
-          hostsPanel.style.maxHeight = '0px';
-          hostsHeader.setAttribute('aria-expanded','false');
-        }
-      }
-      
-      // Start with panel collapsed
-      setHosts(false);
-      hostsHeader.addEventListener('click', () => {
-        // Toggle panel state on click
-        const isOpen = hostsHeader.getAttribute('aria-expanded') === 'true';
-        setHosts(!isOpen);
-      });
-    }
-
-    // Initialize all components after DOM ready
-    document.addEventListener('DOMContentLoaded', function(){
-      // Set initial schedule display based on frequency
-      updateScheduleVisibility();
-      document.getElementById('frequency').addEventListener('change', updateScheduleVisibility);
-      // Initialize input field validation
-      initDayOfMonthClamp();
-      {% if not use_24h %}
-      initTimeClamp();
-      {% endif %}
-      // Setup notification provider switching
-      const provEl = document.getElementById('notifications_provider');
-      if(provEl){
-        provEl.addEventListener('change', updateNotifUI);
-        updateNotifUI();
-      }
-      // Setup collapsible notification panel
-      initNotificationCollapse();
-      
-      // Setup collapsible Docker hosts panel
-      initHostsCollapse();
-      
-      // Load all-time statistics
-      loadStats();
-      
-      // Load Docker hosts
-      loadHosts();
-      setInterval(refreshHostStatuses, 60000);
-      
-      {% if not use_24h %}
-      // Setup 12-hour time picker with AM/PM
-      const timeHidden = document.getElementById('time');
-      const timeHour = document.getElementById('time-hour');
-      const timeMinute = document.getElementById('time-minute');
-      const timePeriod = document.getElementById('time-period');
-      
-      if(timeHidden && timeHour && timeMinute && timePeriod){
-        // Convert 24h time to 12h format for display
-        function init12hTime(){
-          const time24 = timeHidden.value;
-          const [h24Str, minStr] = time24.split(':');
-          const h24 = parseInt(h24Str, 10);
-          const min = parseInt(minStr, 10);
-          let h12, period;
-          
-          // Convert 24-hour to 12-hour format with AM/PM
-          if(h24 === 0){
-            h12 = 12;
-            period = 'AM';
-          } else if(h24 < 12){
-            h12 = h24;
-            period = 'AM';
-          } else if(h24 === 12){
-            h12 = 12;
-            period = 'PM';
-          } else {
-            h12 = h24 - 12;
-            period = 'PM';
-          }
-          
-          // Update display fields with converted values
-          timeHour.value = h12;
-          timeMinute.value = String(min).padStart(2, '0');
-          timePeriod.value = period;
-        }
-        
-        // Convert 12h format to 24h and update hidden field
-        function update24hTime(){
-          let h12 = parseInt(timeHour.value) || 0;
-          let min = parseInt(timeMinute.value) || 0;
-          const period = timePeriod.value;
-          
-          // Ensure values are within valid ranges
-          h12 = Math.max(1, Math.min(12, h12));
-          min = Math.max(0, Math.min(59, min));
-          
-          // Update display fields with clamped values
-          timeHour.value = h12;
-          timeMinute.value = String(min).padStart(2, '0');
-          
-          // Convert 12-hour format back to 24-hour
-          let h24;
-          if(period === 'AM'){
-            h24 = h12 === 12 ? 0 : h12;
-          } else {
-            h24 = h12 === 12 ? 12 : h12 + 12;
-          }
-          
-          // Store 24-hour format in hidden field for form submission
-          timeHidden.value = String(h24).padStart(2, '0') + ':' + String(min).padStart(2, '0');
-        }
-        
-        // Load initial 24h time and convert to 12h display
-        init12hTime();
-        
-        // Update hidden field when 12h fields change
-        timeHour.addEventListener('change', update24hTime);
-        timeMinute.addEventListener('change', update24hTime);
-        timePeriod.addEventListener('change', update24hTime);
-      }
-      {% endif %}
-    });
-
-    // Prune Preview Functions
-    function showPrunePreview() {
-      const modal = document.getElementById('prunePreviewModal');
-      const content = document.getElementById('previewContent');
-      const actions = document.getElementById('previewActions');
-      
-      // Reset actions div to default state (in case it was modified by previous execution)
-      actions.innerHTML = '<button onclick="closePrunePreview()" class="btn" style="background: rgba(148,163,184,0.08); color: var(--text);">Cancel</button><button onclick="executeConfirmedPrune()" class="btn btn-secondary" id="confirmPruneBtn" style="display: none;">✓ Confirm & Execute</button>';
-      
-      modal.style.display = 'block';
-      content.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--muted);"><div style="font-size: 2rem; margin-bottom: 12px;">⏳</div><p>Loading preview...</p></div>';
-      actions.style.visibility = 'hidden';
-      
-      // Collect current prune settings from checkboxes
-      const pruneSettings = {
-        prune_containers: document.getElementById('prune_containers')?.checked || false,
-        prune_images: document.getElementById('prune_images')?.checked || false,
-        prune_networks: document.getElementById('prune_networks')?.checked || false,
-        prune_volumes: document.getElementById('prune_volumes')?.checked || false,
-        prune_build_cache: document.getElementById('prune_build_cache')?.checked || false
-      };
-      
-      fetch('{{ url_for("preview_prune") }}', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(pruneSettings)
-      })
-      .then(response => response.json())
-      .then(data => {
-        if (data.error) {
-          content.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><div style="font-size: 2rem; margin-bottom: 12px;">⚠️</div><p>' + data.error + '</p></div>';
-          return;
-        }
-        
-        let html = '';
-        const totals = data.totals || {containers: 0, images: 0, networks: 0, volumes: 0, build_cache: 0};
-        const hasItems = totals.containers > 0 || totals.images > 0 || totals.networks > 0 || totals.volumes > 0 || totals.build_cache > 0;
-        
-        if (!hasItems) {
-          html = '<div style="text-align: center; padding: 40px; color: var(--accent-strong);"><div style="font-size: 2rem; margin-bottom: 12px;">✅</div><p style="font-size: 1.1rem; margin-bottom: 8px;">Nothing to prune!</p><p style="color: var(--muted); font-size: 0.9rem;">Your Docker resources are already clean.</p></div>';
-          content.innerHTML = html;
-          actions.style.visibility = 'visible';
-          const confirmBtn = document.getElementById('confirmPruneBtn');
-          if (confirmBtn) confirmBtn.style.display = 'none';
-          return;
-        }
-        
-        // Summary
-        html += '<div style="background: rgba(14,165,233,0.08); border: 1px solid rgba(14,165,233,0.2); border-radius: 16px; padding: 20px; margin-bottom: 24px;">';
-        html += '<h3 style="margin: 0 0 16px 0; color: var(--text); font-size: 1.1rem;">📊 Summary</h3>';
-        html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px;">';
-        
-        if (totals.containers > 0) {
-          html += '<div style="text-align: center;"><div style="font-size: 1.8rem; color: var(--accent); margin-bottom: 4px;">' + totals.containers + '</div><div style="color: var(--muted); font-size: 0.85rem;">Containers</div></div>';
-        }
-        if (totals.images > 0) {
-          html += '<div style="text-align: center;"><div style="font-size: 1.8rem; color: var(--accent); margin-bottom: 4px;">' + totals.images + '</div><div style="color: var(--muted); font-size: 0.85rem;">Images</div></div>';
-        }
-        if (totals.networks > 0) {
-          html += '<div style="text-align: center;"><div style="font-size: 1.8rem; color: var(--accent); margin-bottom: 4px;">' + totals.networks + '</div><div style="color: var(--muted); font-size: 0.85rem;">Networks</div></div>';
-        }
-        if (totals.volumes > 0) {
-          html += '<div style="text-align: center;"><div style="font-size: 1.8rem; color: var(--accent); margin-bottom: 4px;">' + totals.volumes + '</div><div style="color: var(--muted); font-size: 0.85rem;">Volumes</div></div>';
-        }
-        if (totals.build_cache > 0) {
-          html += '<div style="text-align: center;"><div style="font-size: 1.8rem; color: var(--accent); margin-bottom: 4px;">' + totals.build_cache + '</div><div style="color: var(--muted); font-size: 0.85rem;">Build Cache</div></div>';
-        }
-        
-        html += '</div></div>';
-        
-        // Per-host details
-        if (data.hosts && data.hosts.length > 0) {
-          data.hosts.forEach(host => {
-            if (!host.success) {
-              html += '<div style="background: rgba(239,68,68,0.06); border: 1px solid rgba(239,68,68,0.15); border-radius: 12px; padding: 16px; margin-bottom: 16px;">';
-              html += '<h4 style="margin: 0 0 8px 0; color: #fca5a5;">❌ ' + host.name + '</h4>';
-              html += '<p style="color: var(--muted); margin: 0; font-size: 0.9rem;">' + (host.error || 'Failed to connect') + '</p>';
-              html += '</div>';
-              return;
-            }
-            
-            const hostTotal = host.totals.containers + host.totals.images + host.totals.networks + host.totals.volumes + (host.totals.build_cache || 0);
-            if (hostTotal === 0) return; // Skip hosts with nothing to prune
-            
-            html += '<div style="background: rgba(148,163,184,0.04); border: 1px solid rgba(148,163,184,0.08); border-radius: 12px; padding: 16px; margin-bottom: 16px;">';
-            html += '<h4 style="margin: 0 0 12px 0; color: var(--text); font-size: 1rem;">🐳 ' + host.name + '</h4>';
-            
-            // Containers
-            if (host.containers && host.containers.length > 0) {
-              html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">🗑️ Containers (' + host.containers.length + '):</strong>';
-              html += '<div style="margin-top: 6px; max-height: 120px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
-              host.containers.slice(0, 10).forEach(c => {
-                html += '<div style="padding: 4px 0;">• ' + (c.name || c.id) + ' <span style="color: #6b7280;">(' + c.status + ')</span></div>';
-              });
-              if (host.containers.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.containers.length - 10) + ' more</div>';
-              }
-              html += '</div></div>';
-            }
-            
-            // Images
-            if (host.images && host.images.length > 0) {
-              html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">💿 Images (' + host.images.length + '):</strong>';
-              html += '<div style="margin-top: 6px; max-height: 120px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
-              host.images.slice(0, 10).forEach(img => {
-                const tags = img.tags.join(', ') || img.id;
-                html += '<div style="padding: 4px 0;">• ' + tags + ' <span style="color: #6b7280;">(' + img.size + ')</span></div>';
-              });
-              if (host.images.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.images.length - 10) + ' more</div>';
-              }
-              html += '</div></div>';
-            }
-            
-            // Networks
-            if (host.networks && host.networks.length > 0) {
-              html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">🌐 Networks (' + host.networks.length + '):</strong>';
-              html += '<div style="margin-top: 6px; max-height: 100px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
-              host.networks.forEach(net => {
-                html += '<div style="padding: 4px 0;">• ' + net.name + '</div>';
-              });
-              html += '</div></div>';
-            }
-            
-            // Volumes
-            if (host.volumes && host.volumes.length > 0) {
-              html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">📦 Volumes (' + host.volumes.length + '):</strong>';
-              html += '<div style="margin-top: 6px; max-height: 100px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
-              host.volumes.forEach(vol => {
-                html += '<div style="padding: 4px 0;">• ' + vol.name + '</div>';
-              });
-              html += '</div></div>';
-            }
-            
-            // Build Cache
-            if (host.build_cache && host.build_cache.length > 0) {
-              html += '<div style="margin-bottom: 12px;"><strong style="color: var(--accent); font-size: 0.9rem;">🏗️ Build Cache (' + host.build_cache.length + '):</strong>';
-              html += '<div style="margin-top: 6px; max-height: 100px; overflow-y: auto; font-size: 0.85rem; color: var(--muted);">';
-              host.build_cache.slice(0, 10).forEach(cache => {
-                html += '<div style="padding: 4px 0;">• ' + cache.id + ' (' + cache.type + ', ' + cache.size + ')</div>';
-              });
-              if (host.build_cache.length > 10) {
-                html += '<div style="padding: 4px 0; font-style: italic;">... and ' + (host.build_cache.length - 10) + ' more</div>';
-              }
-              html += '</div></div>';
-            }
-            
-            html += '</div>';
-          });
-        }
-        
-        content.innerHTML = html;
-        actions.style.visibility = 'visible';
-        const confirmBtn = document.getElementById('confirmPruneBtn');
-        if (confirmBtn) confirmBtn.style.display = hasItems ? 'block' : 'none';
-      })
-      .catch(error => {
-        content.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><div style="font-size: 2rem; margin-bottom: 12px;">❌</div><p>Failed to load preview</p><p style="font-size: 0.85rem; color: var(--muted); margin-top: 8px;">' + error.message + '</p></div>';
-        actions.style.visibility = 'visible';
-        const confirmBtn = document.getElementById('confirmPruneBtn');
-        if (confirmBtn) confirmBtn.style.display = 'none';
-      });
-    }
-
-    function closePrunePreview() {
-      document.getElementById('prunePreviewModal').style.display = 'none';
-    }
-
-    function executeConfirmedPrune() {
-      const btn = document.getElementById('confirmPruneBtn');
-      if (!btn) return; // Safety check
-      
-      const originalText = btn.innerHTML;
-      btn.disabled = true;
-      btn.innerHTML = '⏳ Executing...';
-      
-      // Collect current prune settings from checkboxes (in case they changed between preview and confirm)
-      const pruneSettings = {
-        prune_containers: document.getElementById('prune_containers')?.checked || false,
-        prune_images: document.getElementById('prune_images')?.checked || false,
-        prune_networks: document.getElementById('prune_networks')?.checked || false,
-        prune_volumes: document.getElementById('prune_volumes')?.checked || false,
-        prune_build_cache: document.getElementById('prune_build_cache')?.checked || false
-      };
-      
-      fetch('{{ url_for("run_confirmed") }}', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(pruneSettings)
-      })
-      .then(response => response.json())
-      .then(data => {
-        const content = document.getElementById('previewContent');
-        const actions = document.getElementById('previewActions');
-        if (!content || !actions) return;
-        
-        if (data.success) {
-          content.innerHTML = '<div style="text-align: center; padding: 40px; color: var(--accent-strong);"><div style="font-size: 2rem; margin-bottom: 12px;">✅</div><p style="font-size: 1.1rem; margin-bottom: 8px;">Prune completed successfully!</p><p style="color: var(--muted); font-size: 0.9rem;">Check the logs for detailed results.</p></div>';
-          actions.innerHTML = '<button onclick="closePrunePreview(); setTimeout(loadStats, 500);" class="btn btn-secondary">Close</button>';
-        } else {
-          content.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><div style="font-size: 2rem; margin-bottom: 12px;">⚠️</div><p>' + (data.message || 'Unknown error') + '</p></div>';
-          btn.disabled = false;
-          btn.innerHTML = originalText;
-        }
-      })
-      .catch(error => {
-        const content = document.getElementById('previewContent');
-        if (content) {
-          content.innerHTML = '<div style="text-align: center; padding: 40px; color: #f87171;"><div style="font-size: 2rem; margin-bottom: 12px;">❌</div><p>Execution failed</p><p style="font-size: 0.85rem; color: var(--muted); margin-top: 8px;">' + (error.message || 'Unknown error') + '</p></div>';
-        }
-        btn.disabled = false;
-        btn.innerHTML = originalText;
-      });
-    }
-  </script>
+  <!-- Logs dialog -->
+  <dialog class="modal wide" id="logs-dialog" aria-labelledby="logs-title">
+    <div class="modal-inner">
+      <div class="modal-head">
+        <h2 id="logs-title"><svg class="icon"><use href="#i-logs"/></svg>Logs</h2>
+        <button type="button" class="icon-btn" data-close title="Close"><svg class="icon"><use href="#i-x"/></svg></button>
+      </div>
+      <div class="modal-body">
+        <div class="logs-toolbar">
+          <input type="search" id="logs-filter" placeholder="Filter lines…" aria-label="Filter log lines" />
+          <select id="logs-lines" aria-label="Number of lines">
+            <option value="200">200 lines</option>
+            <option value="500" selected>500 lines</option>
+            <option value="2000">2000 lines</option>
+          </select>
+          <label class="check"><input type="checkbox" id="logs-hide-heartbeat" checked /> Hide heartbeats</label>
+          <button type="button" class="btn btn-secondary btn-sm" id="logs-refresh"><svg class="icon icon-sm"><use href="#i-refresh"/></svg>Refresh</button>
+        </div>
+        <pre class="logs-output" id="logs-output" tabindex="0">Loading…</pre>
+      </div>
+    </div>
+  </dialog>
 </body>
 </html>

@@ -2,6 +2,97 @@
 
 All notable changes to PruneMate will be documented in this file.
 
+## [V2.0.0] - November 2026
+
+### Security
+- 🔑 **No more hard-coded session secret** - The Flask secret key used to default to a fixed value, which allowed
+  forging a logged-in session cookie. A random key is now generated on first start and stored in `/config/secret_key`
+  (or set `PRUNEMATE_SECRET` yourself)
+- 🛡️ **CSRF protection** - All state-changing requests (save, run, preview, hosts, test notification, login, logout)
+  require a per-session token. Logout is now a POST request
+- 🧱 **Content-Security-Policy & security headers** - `script-src 'self'`, `style-src 'self'`, `frame-ancestors 'none'`,
+  `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, HSTS over HTTPS. All inline scripts and styles were moved to
+  `static/`, and the Google Fonts dependency was replaced by self-hosted fonts
+- 🧼 **XSS fixes** - The prune preview no longer inserts container/image/network/volume/host names or error messages as HTML
+- ⛔ **Login brute-force protection** - Temporary lockout per IP after repeated failed logins (form + Basic Auth),
+  constant-time username check, sessions expire (`PRUNEMATE_SESSION_HOURS`), fresh session on login,
+  optional `Secure` cookies (`PRUNEMATE_COOKIE_SECURE`) and reverse-proxy support (`PRUNEMATE_TRUSTED_PROXIES`)
+- 🙈 **Secrets stay server-side** - Notification tokens and webhook URLs are no longer rendered into the page;
+  ntfy URL passwords are masked. Leave a field empty to keep the stored value, or click *Remove*
+- 📝 **Log redaction** - The Telegram bot token and Discord webhook URL were written to the log in plain text on every
+  config save; all token/secret/webhook fields are now redacted. The log viewer redacts old log lines too
+- 🔐 **Gotify token sent as header** (`X-Gotify-Key`) instead of in the URL query string
+- 🔑 **Optional API key** for `/stats` and `/api/stats` (`PRUNEMATE_API_KEY`, `X-API-Key` header)
+- ✅ **Stricter input validation** - Notification URLs must be http(s) (no `file://`), schedule values are whitelisted,
+  host names/URLs are validated, Telegram messages are HTML-escaped, open redirect via `?next=/\evil` fixed
+- 🐳 **Least privilege** - New compose file uses a docker-socket-proxy on an internal network, a read-only root
+  filesystem, `no-new-privileges` and `cap_drop: ALL`. New `PRUNEMATE_DOCKER_HOST` variable
+- 🔒 **TLS for remote hosts** - Mutual TLS with certificate + host name verification (`/certs/<folder>/{ca,cert,key}.pem`)
+- 📦 **Pinned dependencies** (`requirements.txt`), Docker `HEALTHCHECK` (`/healthz`), gunicorn control socket disabled
+
+### Added
+- 📈 **Dashboard** - Next-run countdown, last-run status (with failed hosts), total reclaimed
+- 📊 **Run history** - Bar chart of space reclaimed per run (last 30, with tooltips) and a recent-runs table;
+  stored in `/config/history.json` (last 100 runs, per host). On the first start after upgrading, earlier runs
+  are reconstructed once from the existing V1.x log files (marked "from V1 logs"; space values are rounded)
+- 🏷️ **Protection rules** - Skip resources with a keep label (default `prunemate.keep`) and/or younger than N hours.
+  Applied to scheduled runs, manual runs and the preview
+- 📜 **Log viewer** in the UI with filter, line count and "hide heartbeats"
+- ⚠️ **Volume safety** - Red warning when volume pruning is enabled; manual runs only delete volumes after typing
+  `DELETE` in the preview (otherwise volumes are skipped for that run). Scheduled runs are unchanged
+- 🩺 **Write check** - Red banner and log error when `/config` is not writable; saves report an error instead of
+  silently losing settings
+- 🔔 **Warning banner** when authentication is disabled
+
+### Changed
+- 🎨 **Redesigned UI** - Same dark theme, SVG icons instead of emojis, sticky save bar with
+  unsaved-changes indicator, toasts, native dialogs instead of `alert()/confirm()/prompt()`, collapsible sections
+  via `<details>`, improved mobile layout
+- ⚡ **No page reloads** - Saving settings and managing hosts happen in the background
+- 🌐 Network preview now matches Docker's behavior (networks used by stopped containers are not pruned)
+- 🧵 Gunicorn threads increased from 2 to 4 so the UI stays responsive during a manual prune
+- 📚 **Shorter README** - The README now covers install, login and data protection; details moved to `docs/`
+  (configuration, notifications, multiple hosts, Homepage widget, troubleshooting)
+
+### Fixed
+- 🏗️ **Build cache preview** listed cache entries shared with existing images, which `docker builder prune`
+  keeps. The preview now matches what is actually removed (bug existed since build cache support)
+- 🔒 **Lost config changes** - Concurrent requests (dashboard refresh, heartbeat) could replace the in-memory config
+  between "change" and "save", silently dropping a change. All config writes are now atomic
+- 🚀 **Startup crash on invalid numbers** - Invalid values such as `PRUNEMATE_SESSION_HOURS=12h` now fall back to the
+  default with a warning instead of preventing startup
+- 📝 `PRUNEMATE_LOG_FILE` is now honored by the logger as well as the log viewer
+
+### Removed
+- `POST /run-now` (unused by the UI; use *Preview & run*)
+
+### Upgrading from V1.4.0
+Upgrading is a drop-in image update: `docker compose pull && docker compose up -d`. Your existing
+`docker-compose.yaml` keeps working unchanged (direct socket mount is still supported).
+
+**Kept automatically:** schedule, cleanup options, external hosts, notification settings including stored
+tokens, all-time statistics (`stats.json`) and the login (same `PRUNEMATE_AUTH_PASSWORD_HASH`).
+Downgrading back to V1.4.0 also works; it ignores the new settings.
+
+**Run history:** V1.4.0 only stored totals. On the first V2.0.0 start, PruneMate reads the existing log files
+(`./logs/prunemate.log` and its rotated copies) once and rebuilds the per-run history from them: date, manual or
+scheduled, per-host counts, failed hosts and space reclaimed (rounded, as logged). Only runs that are still in the
+logs (up to ~20 MB) can be imported; the all-time totals are always complete.
+
+**What changes for you:**
+- Everyone is logged out once (new session secret, stored in `/config/secret_key`).
+- Resources labelled `prunemate.keep` are now skipped by default. Disable this under *Cleanup options → Protection*.
+- Scripts that POST to PruneMate (e.g. the removed `/run-now`) need a CSRF token; read-only APIs such as
+  `/api/stats` are unchanged and stay public unless you set `PRUNEMATE_API_KEY`.
+
+**Optional:** switch to the new hardened `docker-compose.yaml` (socket proxy, read-only, `cap_drop: ALL`).
+With `cap_drop: ALL`, `./config` and `./logs` must be writable for root; if not, PruneMate shows a red banner,
+logs an `ERROR` with the fix, and refuses to report unsaved settings as saved.
+
+**Recommended:** V1.4.0 wrote the Telegram bot token and Discord webhook URL in plain text to
+`./logs/prunemate.log`. Start V2.0.0 once first (so the run history is imported), then delete the old log files
+(`./logs/prunemate.log*`) and consider rotating those tokens.
+
 ## [V1.4.0] - November 2026
 
 ### Added

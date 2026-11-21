@@ -8,7 +8,7 @@
 <p align="center"><em>Docker image & resource cleanup helper, on a schedule!</em></p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.4.0-purple?style=for-the-badge"/>
+  <img src="https://img.shields.io/badge/version-2.0.0-purple?style=for-the-badge"/>
   <img src="https://img.shields.io/badge/python-3.12-yellow?style=for-the-badge&logo=python&logoColor=ffffff"/>
   <img src="https://img.shields.io/badge/docker-compose-0db7ed?style=for-the-badge&logo=docker&logoColor=ffffff"/>
   <img src="https://img.shields.io/badge/license-AGPLv3-orange?style=for-the-badge"/>
@@ -17,94 +17,158 @@
   </a>
   <a href="https://www.buymeacoffee.com/anoniemerd">
     <img src="https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy Me a Coffee"/>
+  </a>
   <a href="https://prunemate.org">
     <img src="https://img.shields.io/badge/Visit-Website-0ea5e9?style=for-the-badge&logo=internet-explorer&logoColor=white" alt="Website"/>
   </a>
 </p>
 
-A sleek, lightweight web interface to **automatically clean up Docker resources** on a schedule. Built with Python (Flask) · Docker SDK · APScheduler · Gunicorn
+PruneMate is a lightweight web app that **keeps your Docker hosts tidy by cleaning up unused resources on a
+schedule**: old images, stopped containers, unused networks, volumes and build cache. You choose what to clean
+and when, check a preview whenever you like, and get a notification when it's done.
 
-**Keep your Docker host tidy with scheduled cleanup of unused images, containers, networks, and volumes.**
+Built with Python (Flask) · Docker SDK · APScheduler · Gunicorn. Runs on amd64 and arm64 (Intel/AMD, Raspberry Pi, Apple Silicon).
 
-> ⚠️ **DISCLAIMER**: PruneMate uses Docker's native `prune` commands to delete unused resources. This means it removes containers, images, networks, and volumes that Docker considers "unused" - be careful with volumes as they may contain important data. Ensure you understand what will be pruned before enabling automated schedules. The author is not responsible for any data loss or system issues. **Use at your own risk.**
+> ⚠️ **Disclaimer:** PruneMate uses Docker's own `prune` commands. Removed resources are gone for good. Be
+> especially careful with volumes, because they can contain databases. Make sure you understand what will be
+> removed before you enable a schedule. **Use at your own risk.**
 
 ---
 
 ## ✨ Features
 
-- 🕐 **Flexible scheduling** - Daily, Weekly, or Monthly cleanup runs with optional manual-only mode
-- 🔀 **Schedule control toggle** - Enable/disable automatic scheduling, so PruneMate only runs manually
-- 🔍 **Prune preview** - See exactly what will be deleted before executing manual prune operations
-- 🌍 **Timezone aware** - Configure your local timezone
-- 🕒 **12/24-hour time format** - Choose your preferred time display
-- 🐳 **Multi-host support** - Manage multiple Docker hosts from one interface (requires docker-socket-proxy on remote hosts)
-- 🧹 **Selective cleanup** - Choose what to prune: containers, images, networks, volumes, **build cache**
-- 🏗️ **Build cache cleanup** - Reclaim significant space by pruning Docker builder cache (often 10GB+)
-- 📊 **All-Time Statistics** - Track cumulative space reclaimed and resources deleted across all runs
-- 🏠 **Homepage integration** - Display statistics in your Homepage dashboard (works with authentication enabled)
-- 🎨 **Modern UI** - Dark theme with smooth animations and responsive design
-- 🔒 **Secure authentication** - Optional login protection with password hashing and Basic Auth support
-- 🏗️ **Multi-architecture support** - Native amd64 and arm64 Docker images (Intel/AMD, Raspberry Pi, Apple Silicon)
-- 🔒 **Safe & controlled** - Manual trigger with preview and detailed logging
-- 📈 **Detailed reports** - See exactly what was cleaned and how much space was reclaimed
+**Cleanup**
+- 🕐 **Scheduled cleanup** - daily, weekly or monthly at a time you choose, or manual only
+- 🧹 **You choose what goes** - containers, images, networks, volumes and build cache (often 10 GB+)
+- 🔍 **Preview first** - see per host exactly what will be removed before a manual run
+- 🐳 **Multiple hosts** - clean up other Docker machines from the same interface
+
+**Safety**
+- 🛡️ **Protection rules** - skip anything with a `prunemate.keep` label, or younger than N hours
+- ⚠️ **Volume safeguard** - manual runs only delete volumes after you type `DELETE`
+- 🔒 **Secure by default** - optional login with brute-force protection, hardened container, CSRF protection,
+  secrets never shown in the browser or logs
+
+**Insight**
+- 📈 **Dashboard** - countdown to the next run, result of the last run, all-time totals
+- 📊 **Run history** - chart and table of the last runs, with per-host results
+- 📜 **Log viewer** - read and filter the PruneMate log right in the web UI
+
+**Integrations**
+- 🔔 **Notifications** - Gotify, ntfy, Discord or Telegram, optionally only when something was removed
+- 🏠 **Homepage widget** - show your cleanup stats on your [Homepage](https://gethomepage.dev/) dashboard
 
 ---
 
-## 📷 Screenshots
+## 📷 Examples
 
-### Main Dashboard
-The overall look and feel of the PruneMate dashboard
-
-<p align="center">
-  <img width="1246" height="1759" alt="afbeelding" src="https://github.com/user-attachments/assets/8afaf51c-0414-4bf1-8851-24f5bfded94a" />
-</p>
-
-### Authentication page
-The login page, (when enabled in the docker-compose.yaml environment variables)
+### Dashboard
+The main page: next run, last result, run history and all settings.
 
 <p align="center">
-  <img width="638" height="762" alt="afbeelding" src="https://github.com/user-attachments/assets/4bcfd33f-dee8-4d8a-8f40-5f6c5689b971" />
+  <img width="1246" alt="PruneMate dashboard" src="https://github.com/user-attachments/assets/8afaf51c-0414-4bf1-8851-24f5bfded94a" />
 </p>
 
-### External Docker hosts
-Add external Docker hosts via [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy)
+### Logs
+Read what PruneMate is doing right in the web UI: filter lines, choose how many to show and hide the heartbeats.
+Passwords and tokens are masked.
 
+<!-- TODO: add the Logs screenshot
 <p align="center">
-  <img width="1194" height="521" alt="afbeelding" src="https://github.com/user-attachments/assets/5a2ea525-fa8d-4b45-8b2d-80ef39a0dfc9" />
+  <img width="1246" alt="PruneMate log viewer" src="SCREENSHOT_URL" />
 </p>
+-->
 
-### Notification Settings
-Set up notifications via Gotify, ntfy.sh, Discord, or Telegram to stay informed about cleanup results.
+<details>
+<summary>More screenshots: login, Docker hosts, notifications</summary>
 
-<p align="center">
-  <img width="1194" height="521" alt="afbeelding" src="https://github.com/user-attachments/assets/f30d9063-01ca-4916-8c2c-7d0cecd6ab33" />
-</p>
+**Login page**
+<p align="center"><img width="638" alt="Login page" src="https://github.com/user-attachments/assets/4bcfd33f-dee8-4d8a-8f40-5f6c5689b971" /></p>
 
-### Prune preview
-A brief interface that shows which Docker resources will be pruned during the next cleanup run, either manually triggered or scheduled.
+**External Docker hosts**
+<p align="center"><img width="1194" alt="Docker hosts" src="https://github.com/user-attachments/assets/5a2ea525-fa8d-4b45-8b2d-80ef39a0dfc9" /></p>
 
-<p align="center">
-  <img width="1380" height="974" alt="afbeelding" src="https://github.com/user-attachments/assets/f752d64b-5f9d-4355-b7e4-a9fb3579adf9" />
-</p>
+**Notification settings**
+<p align="center"><img width="1194" alt="Notification settings" src="https://github.com/user-attachments/assets/f30d9063-01ca-4916-8c2c-7d0cecd6ab33" /></p>
 
+</details>
 
 ---
 
-## 🚀 Quick Start with Docker Compose
+## 🚀 Installation
 
-### Prerequisites
+### 1. Create a `docker-compose.yaml`
 
-- Docker and Docker Compose installed
-- Access to Docker socket (`/var/run/docker.sock`)
-
-### Installation
-
-1. **Create a `docker-compose.yaml` file:**
+This setup runs PruneMate together with a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy).
+The proxy only lets through the Docker functions PruneMate needs, so PruneMate never gets full control over
+your Docker host.
 
 ```yaml
 services:
   prunemate:
-    image: anoniemerd/prunemate:latest  # Supports amd64 and arm64
+    image: anoniemerd/prunemate:latest
+    container_name: prunemate
+    ports:
+      - "7676:8080"
+    volumes:
+      - ./logs:/var/log
+      - ./config:/config
+    environment:
+      - PRUNEMATE_TZ=Europe/Amsterdam   # your timezone
+      - PRUNEMATE_TIME_24H=true         # false for 12-hour (AM/PM)
+      - PRUNEMATE_DOCKER_HOST=tcp://socket-proxy:2375
+      # Recommended: enable the login (see "Turn on the login" below)
+      # - PRUNEMATE_AUTH_USER=admin
+      # - PRUNEMATE_AUTH_PASSWORD_HASH=your_base64_encoded_hash_here
+    depends_on:
+      - socket-proxy
+    networks:
+      - default
+      - docker-api
+    # Hardening: read-only filesystem, no extra privileges
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+  socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    container_name: prunemate-socket-proxy
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - VOLUMES=1
+      - BUILD=1   # build cache cleanup
+      - SYSTEM=1  # build cache preview
+      - POST=1    # needed to prune
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-api
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  docker-api:
+    internal: true   # the proxy can't be reached from outside
+```
+
+You can also download this file directly:
+`curl -O https://raw.githubusercontent.com/anoniemerd/PruneMate/main/docker-compose.yaml`
+
+<details>
+<summary>Simpler setup without socket proxy</summary>
+
+```yaml
+services:
+  prunemate:
+    image: anoniemerd/prunemate:latest
     container_name: prunemate
     ports:
       - "7676:8080"
@@ -113,33 +177,18 @@ services:
       - ./logs:/var/log
       - ./config:/config
     environment:
-      - PRUNEMATE_TZ=Europe/Amsterdam # Change this to your desired timezone
-      - PRUNEMATE_TIME_24H=true #false for 12-Hour format (AM/PM)
-      # Optional: Enable authentication (generate hash with: docker run --rm anoniemerd/prunemate python prunemate.py --gen-hash "password")
-      # - PRUNEMATE_AUTH_USER=admin
-      # - PRUNEMATE_AUTH_PASSWORD_HASH=your_base64_encoded_hash_here
+      - PRUNEMATE_TZ=Europe/Amsterdam
+      - PRUNEMATE_TIME_24H=true
     restart: unless-stopped
 ```
 
-2. **Start PruneMate:**
+Mounting the Docker socket directly gives PruneMate full control over Docker (comparable to root access),
+so always turn on the login with this setup.
 
-```bash
-docker-compose up -d
-```
+</details>
 
-3. **Access the web UI of PruneMate:**
-
-Open your browser and navigate to:
-
-```
-http://<your-server-ip>:7676/
-```
-
----
-
-## 🚀 Quick Start with Docker Run
-
-**Using Docker CLI:**
+<details>
+<summary>Using <code>docker run</code> instead of Compose</summary>
 
 ```bash
 docker run -d \
@@ -154,264 +203,150 @@ docker run -d \
   anoniemerd/prunemate:latest
 ```
 
-**Access the web UI:**
+</details>
 
+### 2. Start PruneMate
+
+```bash
+docker compose up -d
 ```
-http://<your-server-ip>:7676/
-```
 
+### 3. Open the web UI
 
+Go to `http://<your-server-ip>:7676`.
 
-**Volume explanations:**
-- `/var/run/docker.sock` - Required for Docker API access
-- `./logs` - Stores application logs (rotating, 5MB max per file)
-- `./config` - Stores configuration and state files
+**What the folders are for:**
+- `./config` - your settings, statistics and run history (keep this folder when updating)
+- `./logs` - the log file (rotating, max 5 MB per file)
+
+> 💡 With `cap_drop: ALL`, both folders must be writable for root. If PruneMate shows a red
+> *"Settings can't be saved"* banner, run `sudo chown -R root:root ./config ./logs`.
 
 ---
 
-## ⚙️ Configuration
+## 🧭 First steps
 
-### Environment Variables
+1. **Schedule** - pick daily, weekly or monthly and a time. Turn the schedule off if you only want manual runs.
+2. **Cleanup options** - switch on what PruneMate may remove (see the table below). Start with images and
+   stopped containers; only enable volumes once you've protected your important data.
+3. **Save** - the bar at the bottom shows when you have unsaved changes.
+4. **Preview & run** - check what would be removed right now, and run it if you like.
+5. **Notifications** (optional) - get a message after each run, see [Notifications](#-notifications).
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `PRUNEMATE_TZ` | `UTC` | Timezone for scheduling (e.g., `Europe/Amsterdam`, `America/New_York`) |
-| `PRUNEMATE_TIME_24H` | `true` | Time format: `true` for 24-hour, `false` for 12-hour (AM/PM) |
-| `PRUNEMATE_CONFIG` | `/config/config.json` | Path to configuration file |
-| `PRUNEMATE_AUTH_USER` | `admin` | Username for authentication (optional, only used when auth is enabled) |
-| `PRUNEMATE_AUTH_PASSWORD_HASH` | _(none)_ | Base64-encoded password hash (enables authentication when set) |
+The dashboard at the top then shows when the next run is, how the last run went and how much space you've
+saved so far.
 
-### 🔐 Authentication (Optional)
+### What gets cleaned
 
-PruneMate supports optional password protection for the web interface and API endpoints.
+| Option | What is removed |
+|--------|-----------------|
+| Stopped containers | Exited, dead and created containers |
+| Unused images | All images not used by any container (not only dangling ones) |
+| Unused networks | Custom networks without containers |
+| Unused volumes | All volumes not attached to a container, **including named volumes** |
+| Build cache | Unused build cache that isn't part of an existing image (like `docker builder prune`) |
 
-**Key features:**
-- 🔒 **Form-based login** - Styled login page matching the app's design
-- 🔑 **Secure hashing** - Passwords are hashed using scrypt (industry standard)
-- 🌐 **API compatibility** - Basic Auth fallback for external tools (Homepage, Dashy, etc.)
-- 🚪 **Logout button** - Convenient session management
+---
 
-**To enable authentication:**
+## 🛡️ Protect important data
 
-1. **Generate a password hash** using the built-in tool:
+Volume cleanup removes **every** volume that isn't attached to a container. That includes the database of a
+stack you've stopped temporarily. PruneMate has two ways to prevent accidents:
+
+**Keep label** - anything with the label `prunemate.keep` is never removed (containers, images, networks and
+volumes). You can change the label name in the web UI.
+
+```bash
+docker volume create --label prunemate.keep postgres_data
+```
+
+```yaml
+# in a compose file
+volumes:
+  db_data:
+    labels:
+      - prunemate.keep
+```
+
+**Minimum age** - only remove resources older than a number of hours, so something you just created or stopped
+isn't cleaned up right away. This works for containers, images, networks and build cache (Docker has no age
+filter for volumes). For images, the age is the build date, not the date you pulled it.
+
+The preview shows how many resources are skipped by these rules. And manual runs only remove volumes after
+you type `DELETE` in the preview.
+
+---
+
+## 🔐 Turn on the login
+
+Without a login, anyone who can reach port 7676 can change settings and delete Docker resources. PruneMate
+shows a warning banner until you turn it on.
+
+**1. Generate a password hash:**
 
 ```bash
 docker run --rm anoniemerd/prunemate:latest python prunemate.py --gen-hash "your_password"
 ```
 
-This outputs a Base64-encoded hash (safe for YAML, no special characters):
-```
-c2NyeXB0OjMyNzY4Ojg6MSRvcDdnZFlGR1JmRFp4Y1RjJDBmMzNlYzc4NzExZTI4MzllYjk0MWFiOTZkOGUyZGNjNGRhMzU2NTlmMGI1ZDg0NjhjZTdkMThhODhmNmQ3ZGRhOGU4YzdmMDYxMWZiNzAyYjA0ZGNhNTBjZWMxZjFlYzc3ZjhlNzJhYmM0MmQ3OTQ5NDM2MDUzZWRlZjlhZGY0
-```
-
-> **Why Base64?** Raw scrypt hashes contain `$` characters that Docker Compose interprets as environment variables, corrupting the hash. Base64 encoding produces alphanumeric strings that YAML handles safely without escaping.
-
-> **✅ Special characters that work well:**
-> - Hash characters: `#`
-> - At sign: `@` 
-> - Percent: `%`
-> - Asterisk: `*`
-> - Ampersand: `&`
-> - Caret: `^`
->
-> **⚠️ Avoid these characters:**
-> - Exclamation mark: `!` (bash history expansion)
-> - Dollar sign: `$` (variable expansion - even Base64 encoded, can cause issues in some contexts)
->
-> **Safe examples:**
-> - `MyPassword#123`
-> - `Test@secure%pass`
-> - `prunemate&admin^2024`
-> - `MyPass*Admin#99`
-
-2. **Add to your docker-compose.yaml:**
+**2. Add it to your compose file** and run `docker compose up -d` again:
 
 ```yaml
-environment:
-  - PRUNEMATE_AUTH_USER=admin  # Optional (default: admin)
-  - PRUNEMATE_AUTH_PASSWORD_HASH=c2NyeXB0OjMyNzY4Ojg6MSRvcDdnZFlGR1JmRFp4Y1RjJDBmMzNlYzc4...
+    environment:
+      - PRUNEMATE_AUTH_USER=admin
+      - PRUNEMATE_AUTH_PASSWORD_HASH=<output from the command above>
 ```
 
-3. **Restart the container:**
+Good to know:
+- Avoid `!` and `$` in your password (the shell treats them specially). `# @ % * & ^` are fine.
+- After 5 wrong passwords from the same IP, logins are blocked for 5 minutes.
+- Tools like Homepage can log in with Basic Auth using your real password.
 
-```bash
-docker-compose up -d
-```
-
-**Important notes:**
-- Authentication is **opt-in** - only enabled when `PRUNEMATE_AUTH_PASSWORD_HASH` is set
-- Without the hash variable, the app runs in open mode (backward compatible)
-- For API clients (Homepage, etc.), use Basic Auth with your actual password (not the hash)
-- The hash is Base64-encoded to prevent Docker Compose from interpreting `$` characters as variables
-
-
-### Web Interface Settings
-
-Access the web interface at `http://localhost:7676/` (or your server IP) to configure:
-
-**Schedule Settings:**
-- **Frequency:** Daily, Weekly, or Monthly
-- **Time:** When to run the cleanup (supports both 12h and 24h format)
-- **Day:** Day of week (for weekly) or day of month (for monthly)
-
-**Cleanup Options:**
-- ☑️ All unused containers
-- ☑️ All unused images  
-- ☑️ All unused networks
-- ☑️ All unused volumes
-
-**Notification Settings:**
-- **Provider:** Gotify, ntfy.sh, Discord, or Telegram
-- **Configuration:** Provider-specific credentials (URL/Token for Gotify, URL/Topic for ntfy, Webhook URL for Discord, Bot Token/Chat ID for Telegram)
-- **Priority:** Low (silent), Medium, or High priority notifications (provider-dependent)
-- **Only notify on changes:** Only send notifications when something was actually cleaned
+More options (session length, HTTPS, reverse proxies): [Configuration](docs/configuration.md#authentication).
 
 ---
 
-## 🧠 How it works
+## ⚙️ Common settings
 
-1. **Scheduler runs** every minute checking if it's time to execute
-2. **Loads latest config** from persistent storage
-3. **Executes Docker prune** commands for selected resource types
-4. **Collects statistics** on what was removed and space reclaimed
-5. **Updates all-time statistics** with cumulative data (space, counts, timestamps)
-6. **Sends notification** (if configured and enabled)
-7. **Logs everything** with timezone-aware timestamps
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `PRUNEMATE_TZ` | `UTC` | Timezone for the schedule, e.g. `Europe/Amsterdam` |
+| `PRUNEMATE_TIME_24H` | `true` | `false` for 12-hour (AM/PM) time |
+| `PRUNEMATE_AUTH_USER` | `admin` | Login username |
+| `PRUNEMATE_AUTH_PASSWORD_HASH` | _(none)_ | Turns on the login |
+| `PRUNEMATE_DOCKER_HOST` | `unix:///var/run/docker.sock` | How PruneMate reaches the local Docker, e.g. `tcp://socket-proxy:2375` |
+| `PRUNEMATE_API_KEY` | _(none)_ | Requires a key for the stats endpoints (Homepage widget) |
+| `PRUNEMATE_COOKIE_SECURE` | `false` | Set to `true` when you serve PruneMate over HTTPS |
+| `PRUNEMATE_TRUSTED_PROXIES` | `0` | Set to `1` behind a reverse proxy (Nginx Proxy Manager, Traefik, …) |
 
-📊 **[View detailed architecture & flowchart](ARCHITECTURE.md)**
-
-### File Structure
-
-```
-/config/
-├── config.json          # Your configuration (persistent)
-├── stats.json           # All-time statistics (cumulative data)
-├── prunemate.lock       # Prevents concurrent runs
-└── last_run_key         # Tracks last successful run
-
-/var/log/
-└── prunemate.log        # Application logs (rotating, 5MB max)
-```
-
-### All-Time Statistics
-
-PruneMate tracks cumulative statistics across all prune runs:
-
-**Metrics tracked:**
-- 💾 **Total Space Reclaimed** - Cumulative disk space freed (displayed in MB/GB/TB)
-- 📦 **Containers Deleted** - Total count of unused containers removed
-- 🖼️ **Images Deleted** - Total count of unused images removed
-- 🔗 **Networks Deleted** - Total count of unused networks removed
-- 💿 **Volumes Deleted** - Total count of unused volumes removed
-- 🔄 **Total Prune Runs** - Number of times prune has executed
-- 📅 **First Run** - Timestamp of the very first prune execution
-- 🕐 **Last Run** - Timestamp of the most recent prune execution
-
-**Technical details:**
-- Statistics persist in `/config/stats.json` using atomic writes with file locking
-- Updates occur after every prune run, regardless of whether resources were deleted
-- Timestamps are timezone-aware and respect `PRUNEMATE_TZ` setting
-- Date/time display in UI follows configured 12h/24h format
-- Statistics survive container restarts and updates
-- Auto-refresh after manual prune runs via web interface
+All settings: [Configuration](docs/configuration.md#environment-variables).
 
 ---
 
-## 🔔 Notification Setup
+## 🔔 Notifications
 
-### Gotify
+Under **Notifications** in the web UI, pick a provider, fill in the fields and click
+**Save & send test notification** to check it.
 
-[Gotify](https://gotify.net/) is a self-hosted notification service.
+| Provider | What you need |
+|----------|---------------|
+| [Gotify](https://gotify.net/) | Server URL and an application token |
+| [ntfy](https://ntfy.sh/) | Server URL (e.g. `https://ntfy.sh`) and a topic; optionally a token or `user:pass@` in the URL |
+| [Discord](https://discord.com/) | A webhook URL (Server settings → Integrations → Webhooks) |
+| [Telegram](https://core.telegram.org/bots) | A bot token from @BotFather and your chat ID |
 
-**Setup steps:**
-1. Install and run Gotify server
-2. Create a new application in Gotify
-3. Copy the application token
-4. Configure in PruneMate:
-   - **Provider:** Gotify
-   - **URL:** `https://your-gotify-server.com`
-   - **Token:** Your application token
+You can choose a priority (low, medium, high) and whether you only want a message when something was actually
+removed. Saved tokens are never shown again; leave the field empty to keep them.
 
-### ntfy.sh
-
-[ntfy.sh](https://ntfy.sh/) is a simple pub-sub notification service (self-hosted or public).
-
-**Setup steps:**
-1. Choose a unique topic name (e.g., `prunemate-alerts`)
-2. Configure in PruneMate:
-   - **Provider:** ntfy
-   - **URL:** `https://ntfy.sh` (or your self-hosted instance, supports `username:password@host` format)
-   - **Topic:** Your chosen topic name
-   - **Token:** (Optional) Bearer token for authentication
-
-**Authentication options:**
-- **Bearer token:** Recommended for API access tokens (higher priority)
-- **URL credentials:** Use `https://username:password@ntfy.example.com` format (RFC 3986 compliant)
-- **No authentication:** Works with public topics
-
-**Subscribe to notifications:**
-- **Web:** Visit `https://ntfy.sh/your-topic`
-- **Mobile:** Install the ntfy app ([Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy) / [iOS](https://apps.apple.com/app/ntfy/id1625396347)) and subscribe to your topic
-- **Desktop:** Use ntfy desktop app or web browser
-
-### Discord
-
-[Discord](https://discord.com/) webhooks allow notifications directly to your Discord server.
-
-**Setup steps:**
-1. Open your Discord server settings
-2. Go to **Integrations** → **Webhooks**
-3. Click **New Webhook** or edit existing webhook
-4. Copy the **Webhook URL**
-5. Configure in PruneMate:
-   - **Provider:** Discord
-   - **Webhook URL:** `https://discord.com/api/webhooks/...`
-
-**Priority colors:**
-- **Low:** Green (informational)
-- **Medium:** Orange (warning)
-- **High:** Red (critical)
-
-### Telegram
-
-[Telegram Bot API](https://core.telegram.org/bots) enables notifications via Telegram bots.
-
-**Setup steps:**
-1. Open Telegram and search for **@BotFather**
-2. Send `/newbot` and follow the instructions
-3. Give your bot a name (e.g., "PruneMate Notifications")
-4. Give your bot a username ending in "bot" (e.g., "prunemate_notif_bot")
-5. Copy the **Bot Token** (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-6. Get your **Chat ID**:
-   - **Easy method:** Message **@userinfobot** or **@getmyid_bot** to get your Chat ID
-   - **Alternative:** Message your bot, then visit `https://api.telegram.org/bot<BOT_TOKEN>/getUpdates` and find `"chat":{"id":123456789}`
-7. Configure in PruneMate:
-   - **Provider:** Telegram
-   - **Bot Token:** Your bot token from BotFather
-   - **Chat ID:** Your numeric chat ID (or `@channelname` for channels)
-
-**Priority behavior:**
-- **Low:** Silent notifications (no sound)
-- **Medium/High:** Normal notifications with sound
-
-**Advanced usage:**
-- **Groups:** Add bot to group, get group Chat ID (starts with `-`)
-- **Channels:** Use channel username with `@` (e.g., `@mychannel`) or numeric ID
+Step-by-step per provider: [Notifications](docs/notifications.md).
 
 ---
 
+## 🌐 Multiple Docker hosts
 
-## 🌐 Multi-Host Setup (Optional)
+PruneMate can clean up other Docker machines as well. Each run covers the local host plus every enabled remote
+host, with results per host.
 
-PruneMate can manage multiple Docker hosts from a single interface. Each prune operation runs across all enabled hosts with aggregated results.
-
-### Security First: Use Docker Socket Proxy
-
-⚠️ **Never expose Docker sockets directly!** Always use [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) to limit API access.
-
-### Quick Setup
-
-**1. Deploy proxy on each remote host:**
+**1.** On the remote machine, run a socket proxy:
 
 ```yaml
 services:
@@ -422,46 +357,26 @@ services:
       - IMAGES=1
       - NETWORKS=1
       - VOLUMES=1
-      - BUILD=1         # REQUIRED FOR BUILD CACHE PRUNE
-      - POST=1          # Required for prune operations
+      - BUILD=1
+      - SYSTEM=1
+      - POST=1
     ports:
-      - "2375:2375"
+      - "192.168.1.50:2375:2375"   # the machine's LAN IP
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     restart: unless-stopped
 ```
 
-> **⚠️ IMPORTANT:** The `BUILD=1` environment variable is **REQUIRED** to enable Docker build cache pruning. Without it, build cache prune operations will fail with a 403 error.
+**2.** In PruneMate, open **Docker hosts → Add host** and enter a name and `tcp://192.168.1.50:2375`.
 
-**2. Add hosts in PruneMate UI:**
-- Navigate to **Docker Hosts** section
-- Click **Add New Host**
-- Enter name (e.g., "NAS") and URL (e.g., `tcp://192.168.1.50:2375`)
-- Toggle hosts on/off as needed
-
-**3. Test connection:**
-Click **Run now** and check logs for successful connection to all hosts.
-
-
-### Troubleshooting
-
-- **Connection refused**: Verify proxy is running (`docker ps`) and port 2375 is accessible
-- **Permission denied**: Ensure proxy has `POST=1` environment variable
-- **Host skipped**: Check URL format starts with `tcp://`, `http://`, or `https://`
+The status dot turns green when the host is reachable. Port 2375 isn't encrypted, so only use it on a network
+you trust. For encrypted connections with TLS, see [Multiple Docker hosts](docs/multi-host.md#option-2-tls-encrypted).
 
 ---
 
-## 🏠 Homepage Dashboard Integration
+## 🏠 Homepage widget
 
-PruneMate provides a custom API endpoint at `/api/stats` that returns all-time statistics in a format compatible with [Homepage](https://gethomepage.dev/) dashboard widgets.
-
-<p align="center">
-  <img width="658" height="212" alt="afbeelding" src="https://github.com/user-attachments/assets/ae27323a-53d1-4ef3-acfc-a363b7f854de" />
-</p>
-
-### Setup
-
-Add this configuration to your Homepage `services.yaml`:
+Add this to Homepage's `services.yaml`:
 
 ```yaml
 - PruneMate:
@@ -477,114 +392,91 @@ Add this configuration to your Homepage `services.yaml`:
           format: number
         - field: lastRunText
           label: Last Run
-        - field: imagesDeleted
-          label: Images Pruned
-          format: number
         - field: spaceReclaimedHuman
           label: Space Saved
 ```
 
-### Available Fields
+<p align="center">
+  <img width="658" alt="Homepage widget" src="https://github.com/user-attachments/assets/ae27323a-53d1-4ef3-acfc-a363b7f854de" />
+</p>
 
-The `/api/stats` endpoint returns the following fields:
+All available fields and the API key option: [Homepage widget](docs/homepage.md).
 
-| Field | Type | Description | Homepage Format |
-|-------|------|-------------|-----------------|
-| `pruneRuns` | number | Total number of prune operations executed | `number` |
-| `containersDeleted` | number | Total containers deleted across all runs | `number` |
-| `imagesDeleted` | number | Total images deleted across all runs | `number` |
-| `networksDeleted` | number | Total networks deleted across all runs | `number` |
-| `volumesDeleted` | number | Total volumes deleted across all runs | `number` |
-| `buildCacheDeleted` | number | Total build cache entries deleted across all runs | `number` |
-| `spaceReclaimed` | number | Total space reclaimed in bytes | `number` |
-| `spaceReclaimedHuman` | string | Human-readable space reclaimed (e.g., "2.5 GB") | `text` |
-| `lastRunText` | string | Relative time as text (e.g., "2h ago") | `text` |
-| `lastRunTimestamp` | number | Unix timestamp in seconds of last run | `number` |
-| `lastRun` | string | ISO timestamp of most recent prune run | `date` |
-| `firstRun` | string | ISO timestamp of first prune run | `date` |
+---
 
-### Example /api/stats output
+## 🧠 How it works
 
-```json
-{
-  "pruneRuns": 42,
-  "containersDeleted": 156,
-  "imagesDeleted": 89,
-  "networksDeleted": 12,
-  "volumesDeleted": 7,
-  "buildCacheDeleted": 715,
-  "spaceReclaimed": 5368709120,
-  "spaceReclaimedHuman": "5.00 GB",
-  "lastRunText": "2h ago",
-  "lastRunTimestamp": 1733454000,
-  "lastRun": "2025-12-06T03:00:00+01:00",
-  "firstRun": "2025-01-15T03:00:00+01:00"
-}
+1. Every minute, PruneMate checks whether a scheduled run is due.
+2. It connects to the local Docker host and every enabled remote host.
+3. On each host it runs the cleanup options you selected, skipping protected resources.
+4. It adds the results to the all-time statistics and the run history.
+5. It sends a notification, if configured.
+6. Everything is written to the log (without passwords or tokens).
+
+Manual runs work the same way, but start with a preview that you confirm first.
+More detail: [Architecture](ARCHITECTURE.md).
+
+---
+
+## 🩺 Troubleshooting
+
+| Problem | Fix |
+|---------|-----|
+| Can't open the web UI | Check the container runs (`docker ps`) and port 7676 isn't blocked or already in use |
+| *"Settings can't be saved"* banner | Run `sudo chown -R root:root ./config ./logs`, or remove `cap_drop: ALL` |
+| Local Docker shows nothing / errors | With the socket proxy, check `PRUNEMATE_DOCKER_HOST=tcp://socket-proxy:2375` |
+| Remote host stays red | Check the proxy runs and port 2375 is reachable; the reason is in **Logs** |
+| Notifications don't arrive | Use **Save & send test notification** and check **Logs** for the error |
+| Schedule runs at the wrong time | Set `PRUNEMATE_TZ` and restart the container |
+
+The **Logs** button in the top right of the web UI shows what PruneMate is doing.
+More problems and fixes: [Troubleshooting](docs/troubleshooting.md).
+
+---
+
+## ⬆️ Upgrading from V1.4.0
+
+```bash
+docker compose pull && docker compose up -d
 ```
----
 
-## 🧠 Troubleshooting
+Your settings, hosts, notification tokens, statistics and login are kept, and earlier runs are imported from
+your existing logs into the new run history. A few things to know:
 
-| Problem | Solution |
-|---------|----------|
-| ❌ Can't access web interface | • Check if port 7676 is available and not blocked by firewall<br>• Verify container is running: `docker ps`<br>• Check logs: `docker logs prunemate` |
-| 🏗️ ARM architecture error | • Since V1.3.1+: Image now has native multi-architecture support (amd64 + arm64)<br>• Pull `anoniemerd/prunemate:latest` - it will auto-detect your platform<br>• No local build required anymore!<br>• If running older versions, use `build: .` in docker-compose.yaml |
-| ⚙️ Container not starting | • View startup errors: `docker logs prunemate`<br>• Verify Docker socket is accessible<br>• Check if port 7676 is already in use |
-| 🔒 Permission denied errors | • Ensure `/var/run/docker.sock` exists and is accessible<br>• On Linux, Docker daemon must be running<br>• User running Docker must have proper permissions |
-| 🕐 Wrong timezone in logs/schedule | • Set `PRUNEMATE_TZ` environment variable correctly<br>• Restart container after changing: `docker-compose restart`<br>• Verify timezone in logs matches expected |
-| 📧 Notifications not working | • Test notification settings in web interface<br>• Verify notification server URL is accessible<br>• Check token/topic is correct<br>• Review logs for error messages |
-| 🗂️ Configuration not persisting | • Ensure `./config` volume is mounted correctly<br>• Check file permissions on host `./config` directory<br>• Verify container has write access |
-| 🧹 Cleanup not running on schedule | • Check schedule configuration in web interface<br>• Verify timezone is set correctly<br>• Review logs: "Next scheduled run" messages<br>• Ensure container is running continuously |
+- You'll need to sign in once more.
+- Resources with the `prunemate.keep` label are now skipped (you can turn this off).
+- Your existing compose file keeps working. Switching to the socket proxy setup above is optional but recommended.
+- V1.4.0 wrote some notification tokens to its log file. After the first start of V2.0.0, delete the old
+  `./logs/prunemate.log*` files and consider renewing those tokens.
+
+All changes: [Changelog](CHANGELOG.md).
 
 ---
 
-### Logging
+## 📚 Documentation
 
-**What the logs contain:**
-- ✅ Scheduler heartbeats (every minute)
-- 📝 Configuration changes
-- 🧹 Prune job executions with results
-- 📨 Notification delivery status
-- ❌ Error messages and warnings
-
----
-
-## 📜 Release Notes
-
-## [V1.4.0] - November 2026
-
-### Added
-- 💓 **Health ping for external hosts** - External Docker hosts are now pinged to check their health
-  - Status symbol changes color based on the result of the health check for External Docker hosts
-    - Green = online, red = offline, grey = disabled, amber = checking or status unavailable
-  - New `/hosts/status` endpoint checks all enabled external hosts in parallel; statuses refresh every 60 seconds
-  - Docker connections to remote hosts are now verified with a ping and a 5 second connect timeout, so unreachable hosts wil not run the scheduled prune run
-
-### Changed
-- 🔔 **Shorter, cleaner notifications** - Notifications are more compact and less cluttered
-  - Removed emojis from notification text for a cleaner look across all providers
-  - Per-host results only list the items that were actually pruned
-  - Totals across all hosts are skipped when only one host had deletions, avoiding duplicate information
-- 🎨 **Improved icons** - Updated icons for external hosts and notifications in the PruneMate interface
-
-📖 **[View full changelog](CHANGELOG.md)**
+| Topic | |
+|-------|---|
+| [Configuration](docs/configuration.md) | All settings, login details, security features, files and logs |
+| [Notifications](docs/notifications.md) | Step-by-step setup for Gotify, ntfy, Discord and Telegram |
+| [Multiple Docker hosts](docs/multi-host.md) | Socket proxy and TLS setup |
+| [Homepage widget](docs/homepage.md) | Widget configuration and all available fields |
+| [Troubleshooting](docs/troubleshooting.md) | Common problems and fixes |
+| [Architecture](ARCHITECTURE.md) | How PruneMate works inside |
+| [Changelog](CHANGELOG.md) | What changed per version |
 
 ---
 
 ## 📬 Support
 
-Have questions or need help?
-
-- 🐛 **Bug reports:** [Open an issue on GitHub](https://github.com/anoniemerd/PruneMate/issues)
-- 💡 **Feature requests:** [Open an issue on GitHub](https://github.com/anoniemerd/PruneMate/issues)
-- 💬 **Questions & Discussion:** [Start a discussion on GitHub](https://github.com/anoniemerd/PruneMate/discussions)
+- 🐛 **Bug reports & feature requests:** [GitHub issues](https://github.com/anoniemerd/PruneMate/issues)
+- 💬 **Questions & discussion:** [GitHub discussions](https://github.com/anoniemerd/PruneMate/discussions)
 - ⭐ **Like PruneMate?** Give it a star!
 
----
+## ☕ Support the project
 
-## ☕ Support the Project
-
-If you find PruneMate useful and would like to support the development, consider buying me a coffee!
+If PruneMate is useful to you, consider buying me a coffee. It helps me spend more time on maintaining and
+improving PruneMate! ❤️
 
 <p align="center">
   <a href="https://www.buymeacoffee.com/anoniemerd" target="_blank">
@@ -592,58 +484,21 @@ If you find PruneMate useful and would like to support the development, consider
   </a>
 </p>
 
-Your support helps me dedicate more time to maintaining and improving PruneMate! ❤️
-
----
-
-## 👤 Author & License
-
-**Author:** Anoniemerd  
-🐙 GitHub: <https://github.com/anoniemerd>  
-📦 Repository: <https://github.com/anoniemerd/PruneMate>
-
----
-
 ## 👥 Contributors
 
-I'm grateful for the contributions that make PruneMate better!
+- **[@difagume](https://github.com/difagume)** - 🔐 Authentication system (V1.3.0)
+- **[@shollyethan](https://github.com/shollyethan)** - 🎨 Logo redesign and the Self-Hosted Dashboard Icons entry
+- **[anoniemerd](https://github.com/anoniemerd)** - Creator and maintainer
 
-### Contributors
-- **[@difagume](https://github.com/difagume)** - 🔐 Authentication system implementation (V1.3.0)
-- **[@shollyethan](https://github.com/shollyethan)** - 🎨 Logo redesign & added the logo to Self-Hosted Dashboard Icons
+## 📜 License
 
-### Project maintainer/owner
-- **[anoniemerd](https://github.com/anoniemerd)** - Project creator and maintainer
+PruneMate is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. If you use, modify or
+distribute it, you must keep the copyright notice, publish the source of modified versions (also when you run
+them as a network service) and license derivative works under AGPL-3.0. See [`LICENSE`](./LICENSE).
 
-
----
-
-### 📜 License — AGPLv3
-
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
-
-By using, modifying, or distributing this software, you **must**:
-
-- Keep this copyright notice
-- Disclose source code of any modified version
-- Disclose source code if used to provide a network service
-- License any derivative works under **AGPL-3.0**
-
-See the full license text in: [`LICENSE`](./LICENSE)
-
-### ⚠️ Disclaimer
-
-**USE AT YOUR OWN RISK.** PruneMate is provided "as is" without warranty of any kind. The author(s) and contributors are not responsible for:
-- Data loss from pruned Docker resources
-- Service interruptions or downtime
-- System instability or performance issues
-- Any damages resulting from the use or misuse of this software
-
-Always:
-- ✅ Understand which resources will be deleted
-- ✅ Keep backups of important data and configurations
-- ✅ Review logs after prune operations
-- ✅ Start with conservative settings
+**Disclaimer:** PruneMate is provided "as is", without warranty of any kind. The authors are not responsible for
+data loss, downtime or any other damage. Always check the preview, keep backups of important data and start
+with conservative settings.
 
 © 2026 – PruneMate Project
 

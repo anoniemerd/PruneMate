@@ -5,13 +5,59 @@ services:
     ports:
       - "7676:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ./logs:/var/log
       - ./config:/config
+      # Optional: TLS client certificates for remote hosts (<folder>/ca.pem, cert.pem, key.pem)
+      # - ./certs:/certs:ro
     environment:
       - PRUNEMATE_TZ=Europe/Amsterdam # Change this to your desired timezone
       - PRUNEMATE_TIME_24H=true #false for 12-Hour format (AM/PM)
-      # Optional: Enable authentication (generate hash with: docker run --rm anoniemerd/prunemate python prunemate.py --gen-hash "password")
+      # Talk to the local Docker engine through the restricted socket proxy below
+      - PRUNEMATE_DOCKER_HOST=tcp://socket-proxy:2375
+      # Recommended: Enable authentication (generate hash with: docker run --rm anoniemerd/prunemate python prunemate.py --gen-hash "password")
       # - PRUNEMATE_AUTH_USER=admin
       # - PRUNEMATE_AUTH_PASSWORD_HASH=your_base64_encoded_hash_here
+      # Optional: require an API key for /stats and /api/stats (send as X-API-Key header)
+      # - PRUNEMATE_API_KEY=change-me-to-a-long-random-string
+      # Optional: when served via HTTPS behind a reverse proxy
+      # - PRUNEMATE_COOKIE_SECURE=true
+      # - PRUNEMATE_TRUSTED_PROXIES=1
+    depends_on:
+      - socket-proxy
+    networks:
+      - default
+      - docker-api
+    # Hardening: read-only root filesystem, no privilege escalation, no Linux capabilities
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     restart: unless-stopped
+
+  # Only exposes the Docker API endpoints PruneMate needs; not reachable from outside
+  socket-proxy:
+    image: ghcr.io/tecnativa/docker-socket-proxy:latest
+    container_name: prunemate-socket-proxy
+    environment:
+      - CONTAINERS=1
+      - IMAGES=1
+      - NETWORKS=1
+      - VOLUMES=1
+      - BUILD=1   # Build cache prune
+      - SYSTEM=1  # Build cache preview (docker system df)
+      - POST=1    # Required for prune operations
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - docker-api
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+networks:
+  # Internal network: the proxy has no route to the outside world
+  docker-api:
+    internal: true

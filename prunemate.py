@@ -1,19 +1,28 @@
 import os
+import re
 import sys
 import json
+import functools
+import hmac
+import html
+import time
+import secrets
 import logging
 import tempfile
 import datetime
 import calendar
 import base64
+import threading
 import urllib.request
 import urllib.parse
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, Response, make_response
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, Response
 from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.middleware.proxy_fix import ProxyFix
 from filelock import FileLock, Timeout
 from gunicorn.app.base import BaseApplication
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -23,15 +32,28 @@ from zoneinfo import ZoneInfo
 # optional docker import (best-effort)
 try:
     import docker
+    import docker.tls
 except Exception:
     docker = None
 
+APP_VERSION = "2.0.0"
+
 # Application
 app = Flask(__name__)
-app.secret_key = os.environ.get("PRUNEMATE_SECRET", "prunemate-secret-key")
 
 # Paths and defaults
 CONFIG_PATH = Path(os.environ.get("PRUNEMATE_CONFIG", "/config/config.json"))
+# Persisted Flask secret key (generated on first start when PRUNEMATE_SECRET is not set)
+SECRET_FILE = Path(os.environ.get("PRUNEMATE_SECRET_FILE", str(CONFIG_PATH.parent / "secret_key")))
+# Run history (last N runs with per-host results)
+HISTORY_FILE = Path(os.environ.get("PRUNEMATE_HISTORY", str(CONFIG_PATH.parent / "history.json")))
+HISTORY_LIMIT = 100
+# Log file shown in the UI log viewer
+LOG_FILE = Path(os.environ.get("PRUNEMATE_LOG_FILE", "/var/log/prunemate.log"))
+# Docker endpoint for the "Local" host (set to tcp://socket-proxy:2375 when using a socket proxy)
+LOCAL_DOCKER_URL = os.environ.get("PRUNEMATE_DOCKER_HOST", "unix:///var/run/docker.sock").strip() or "unix:///var/run/docker.sock"
+# Root directory for TLS client certificates of remote hosts (<root>/<name>/{ca,cert,key}.pem)
+CERTS_ROOT = Path(os.environ.get("PRUNEMATE_CERTS_DIR", "/certs"))
 # File lock to serialize prune jobs across processes
 LOCK_FILE = Path(os.environ.get("PRUNEMATE_LOCK", "/config/prunemate.lock"))
 # File to persist the last run key so multiple workers don't double-trigger
@@ -51,6 +73,10 @@ DEFAULT_CONFIG = {
     "prune_networks": False,
     "prune_volumes": False,
     "prune_build_cache": False,
+    # Exclusions: resources with this label are never pruned (empty string disables)
+    "protect_label": "prunemate.keep",
+    # Only prune resources older than N hours (0 = no age limit; not supported for volumes)
+    "min_age_hours": 0,
     "docker_hosts": [],
     "notifications": {
         "provider": "gotify",
@@ -65,7 +91,6 @@ DEFAULT_CONFIG = {
 
 config = json.loads(json.dumps(DEFAULT_CONFIG))
 # Lock to ensure thread-safe config read/write across workers
-import threading
 config_lock = threading.RLock()
 # In-memory cache (best-effort) for last run; authoritative value is on disk
 last_run_key = {"value": None}
@@ -91,8 +116,8 @@ def configure_logging():
     ch.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(ch)
     try:
-        Path("/var/log").mkdir(parents=True, exist_ok=True)
-        fh = RotatingFileHandler("/var/log/prunemate.log", maxBytes=5_000_000, backupCount=3)
+        LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(str(LOG_FILE), maxBytes=5_000_000, backupCount=3)
         # Note: %(asctime)s uses system local time, not app_timezone
         # Custom log() function handles timezone-aware timestamps
         fh.setFormatter(logging.Formatter("%(message)s"))
@@ -140,13 +165,21 @@ def log(message: str):
     logging.info("[%s] %s", timestamp, message)
 
 
+_SECRET_KEY_NAMES = {"token", "bot_token", "webhook_url", "api_key", "apikey", "password", "secret"}
+
+
+def _is_secret_key(key: str) -> bool:
+    k = key.lower()
+    return k in _SECRET_KEY_NAMES or k.endswith("_token") or k.endswith("_password") or k.endswith("_secret")
+
+
 def _redact_for_log(obj):
     """Return a deep-copied structure with secrets redacted for safe logging."""
     if isinstance(obj, dict):
         redacted = {}
         for k, v in obj.items():
-            if k.lower() in {"token", "api_key", "apikey", "password", "secret"}:
-                redacted[k] = "***"
+            if _is_secret_key(k):
+                redacted[k] = "***" if v else ""
             elif k.lower() == "url" and isinstance(v, str):
                 # Redact username:password in URLs
                 parsed = urllib.parse.urlparse(v)
@@ -168,6 +201,75 @@ def _redact_for_log(obj):
     if isinstance(obj, list):
         return [_redact_for_log(x) for x in obj]
     return obj
+
+
+# ---- Secret key & session hardening ----
+def _load_or_create_secret_key() -> str:
+    """Return the Flask secret key.
+
+    Priority: PRUNEMATE_SECRET env var -> persisted key file -> newly generated key
+    (persisted with 0600 permissions). Never falls back to a hard-coded value.
+    """
+    env_secret = (os.environ.get("PRUNEMATE_SECRET") or "").strip()
+    if env_secret:
+        if len(env_secret) < 32:
+            logging.warning("PRUNEMATE_SECRET is shorter than 32 characters; consider using a longer random value.")
+        return env_secret
+    try:
+        if SECRET_FILE.exists():
+            existing = SECRET_FILE.read_text(encoding="utf-8").strip()
+            if len(existing) >= 32:
+                return existing
+        SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+        new_secret = secrets.token_hex(32)
+        tmp = SECRET_FILE.with_suffix(".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(new_secret)
+        tmp.replace(SECRET_FILE)
+        logging.info("Generated new session secret key at %s", SECRET_FILE)
+        return new_secret
+    except Exception as e:
+        logging.warning("Could not persist secret key (%s); using an ephemeral key. Sessions reset on restart.", e)
+        return secrets.token_hex(32)
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    val = os.environ.get(name)
+    if val is None:
+        return default
+    return val.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_int(name: str, default: int, minimum: int = 0) -> int:
+    """Parse an integer env var; invalid values fall back to the default instead of crashing."""
+    raw = (os.environ.get(name) or "").strip()
+    if not raw:
+        return default
+    try:
+        return max(minimum, int(raw))
+    except ValueError:
+        logging.warning("Invalid value %s=%r (expected a number); using %d.", name, raw, default)
+        return default
+
+
+app.secret_key = _load_or_create_secret_key()
+app.config.update(
+    SESSION_COOKIE_NAME="prunemate_session",
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    # Enable when PruneMate is served over HTTPS (e.g. behind a reverse proxy)
+    SESSION_COOKIE_SECURE=_env_bool("PRUNEMATE_COOKIE_SECURE", False),
+    PERMANENT_SESSION_LIFETIME=datetime.timedelta(hours=_env_int("PRUNEMATE_SESSION_HOURS", 12, minimum=1)),
+    MAX_CONTENT_LENGTH=1 * 1024 * 1024,
+    TEMPLATES_AUTO_RELOAD=False,
+)
+
+# Trust X-Forwarded-* headers only when explicitly configured (number of proxies in front)
+_trusted_proxies = _env_int("PRUNEMATE_TRUSTED_PROXIES", 0, minimum=0)
+if _trusted_proxies > 0:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=_trusted_proxies, x_proto=_trusted_proxies, x_host=_trusted_proxies)
+    logging.info("Trusting %d reverse proxy hop(s) for X-Forwarded-* headers", _trusted_proxies)
 
 
 # ---- Cross-process last-run tracking (prevents duplicate scheduled triggers) ----
@@ -313,8 +415,181 @@ def update_stats(containers: int, images: int, networks: int, volumes: int, buil
     if stats.get("first_run") is None:
         stats["first_run"] = now
     stats["last_run"] = now
-    
+
     save_stats(stats)
+
+
+# ---- Run history (last N runs) ----
+def _atomic_write_json(path: Path, data) -> None:
+    """Write JSON atomically with fsync and 0600 permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = None
+    try:
+        with tempfile.NamedTemporaryFile("w", delete=False, dir=str(path.parent), encoding="utf-8") as tmp:
+            json.dump(data, tmp, indent=2)
+            tmp.flush()
+            os.fsync(tmp.fileno())
+            tmp_path = Path(tmp.name)
+        try:
+            tmp_path.chmod(0o600)
+        except Exception:
+            pass
+        tmp_path.replace(path)
+    finally:
+        if tmp_path and tmp_path.exists() and tmp_path != path:
+            try:
+                tmp_path.unlink()
+            except Exception:
+                pass
+
+
+def load_history() -> list:
+    """Load run history (oldest first). Returns an empty list on any error."""
+    try:
+        if HISTORY_FILE.exists():
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            if isinstance(data, list):
+                return [r for r in data if isinstance(r, dict)][-HISTORY_LIMIT:]
+    except Exception as e:
+        log(f"Error loading history from {HISTORY_FILE}: {e}")
+    return []
+
+
+def append_history(record: dict) -> None:
+    """Append a run record to the history file, keeping the last HISTORY_LIMIT entries."""
+    try:
+        history = load_history()
+        history.append(record)
+        _atomic_write_json(HISTORY_FILE, history[-HISTORY_LIMIT:])
+    except Exception as e:
+        log(f"Error saving history: {e}")
+
+
+# ---- One-time import of run history from V1.x log files ----
+_LOG_LINE_RE = re.compile(r"^\[(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:[+-]\d{2}:\d{2}|Z)?)\] (.*)$")
+_HOST_DONE_RE = re.compile(
+    r"^\[(.*)\] Prune completed: containers=(\d+), images=(\d+), networks=(\d+), volumes=(\d+), "
+    r"build_cache=(\d+), space=([\d.]+) (B|KB|MB|GB|TB|PB)$"
+)
+_HOST_START_RE = re.compile(r"^--- Processing host: (.*) \([^()]*\) ---$")
+_UNIT_POWER = {"B": 0, "KB": 1, "MB": 2, "GB": 3, "TB": 4, "PB": 5}
+
+
+def _parse_runs_from_log_lines(lines) -> list:
+    """Reconstruct run records from PruneMate log lines (format used by V1.3+ and V2)."""
+    runs = []
+    origin = "unknown"
+    current = None
+
+    for raw in lines:
+        m = _LOG_LINE_RE.match(raw.rstrip("\n"))
+        if not m:
+            continue
+        ts, msg = m.group(1), m.group(2)
+
+        if msg in ("Confirmed manual run trigger received.", "Manual run trigger received."):
+            origin = "manual"
+        elif msg.startswith("Scheduled time reached"):
+            origin = "scheduled"
+        elif msg == "Starting prune job with configuration:":
+            current = {"start": ts, "origin": origin, "hosts": []}
+            origin = "unknown"
+        elif current is None:
+            continue
+        elif msg.startswith(("No prune options selected", "Docker SDK not available")):
+            current = None
+        elif _HOST_START_RE.match(msg):
+            current["host"] = _HOST_START_RE.match(msg).group(1)
+        elif msg.startswith("Failed to connect to ") and msg.endswith("; skipping this host."):
+            name = msg[len("Failed to connect to "):-len("; skipping this host.")]
+            current["hosts"].append({"name": name, "success": False, "error": "Failed to connect",
+                                     "containers": 0, "images": 0, "networks": 0, "volumes": 0,
+                                     "build_cache": 0, "space": 0})
+        elif " Unexpected error during prune: " in msg and msg.startswith("["):
+            name = msg[1:msg.index("] Unexpected error during prune: ")]
+            current["hosts"].append({"name": name, "success": False, "error": "Unexpected error (see logs)",
+                                     "containers": 0, "images": 0, "networks": 0, "volumes": 0,
+                                     "build_cache": 0, "space": 0})
+        elif _HOST_DONE_RE.match(msg):
+            g = _HOST_DONE_RE.match(msg).groups()
+            current["hosts"].append({
+                "name": g[0], "success": True,
+                "containers": int(g[1]), "images": int(g[2]), "networks": int(g[3]),
+                "volumes": int(g[4]), "build_cache": int(g[5]),
+                "space": int(float(g[6]) * (1024 ** _UNIT_POWER[g[7]])),
+            })
+        elif msg == "Prune job finished for all hosts.":
+            if current["hosts"]:
+                totals = {k: sum(h[k] for h in current["hosts"])
+                          for k in ("containers", "images", "networks", "volumes", "build_cache", "space")}
+                try:
+                    duration = (datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                - datetime.datetime.fromisoformat(current["start"].replace("Z", "+00:00"))).total_seconds()
+                except ValueError:
+                    duration = None
+                runs.append({
+                    "timestamp": ts,
+                    "origin": current["origin"],
+                    "duration": round(duration, 1) if duration is not None else None,
+                    "success": all(h["success"] for h in current["hosts"]),
+                    "totals": totals,
+                    "hosts": current["hosts"],
+                    "imported": True,  # reconstructed from logs; space is rounded
+                })
+            current = None
+    return runs
+
+
+def import_history_from_logs() -> int:
+    """On the first V2 start, rebuild run history from the (rotated) V1.x log files.
+
+    Runs only when history.json doesn't exist yet. Always writes history.json afterwards
+    (possibly empty) so the import never runs twice. Returns the number of imported runs.
+    """
+    if HISTORY_FILE.exists():
+        return 0
+    files = [Path(f"{LOG_FILE}.{i}") for i in (3, 2, 1)] + [LOG_FILE]  # oldest first
+    runs = []
+    for path in files:
+        if not path.is_file():
+            continue
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                runs.extend(_parse_runs_from_log_lines(f))
+        except Exception as e:
+            log(f"History import: could not read {path}: {e}")
+    try:
+        _atomic_write_json(HISTORY_FILE, runs[-HISTORY_LIMIT:])
+    except Exception as e:
+        log(f"History import: could not write {HISTORY_FILE}: {e}")
+        return 0
+    if runs:
+        log(f"History import: reconstructed {len(runs)} earlier run(s) from log files "
+            f"(kept the last {min(len(runs), HISTORY_LIMIT)}).")
+    return min(len(runs), HISTORY_LIMIT)
+
+
+_FRACTION_RE = re.compile(r"(\.\d{6})\d+")
+
+
+def parse_docker_time(value) -> datetime.datetime | None:
+    """Parse Docker timestamps (RFC3339 with nanoseconds, or unix seconds) to aware UTC datetimes."""
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, (int, float)):
+            return datetime.datetime.fromtimestamp(value, tz=datetime.timezone.utc)
+        s = str(value).strip()
+        if s.startswith("0001-01-01"):
+            return None
+        s = _FRACTION_RE.sub(r"\1", s).replace("Z", "+00:00")
+        dt = datetime.datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+        return dt
+    except Exception:
+        return None
 
 
 def human_bytes(num: int) -> str:
@@ -369,6 +644,51 @@ def describe_schedule() -> str:
     return f"{freq} at {formatted_time} ({tz_name})"
 
 
+def compute_next_run(now: datetime.datetime | None = None) -> datetime.datetime | None:
+    """Return the next scheduled run as an aware datetime, or None when the schedule is disabled."""
+    if not config.get("schedule_enabled", True):
+        return None
+    now = now or datetime.datetime.now(app_timezone)
+    try:
+        hour, minute = [int(x) for x in str(config.get("time", "03:00")).split(":", 1)]
+    except Exception:
+        hour, minute = 3, 0
+    freq = config.get("frequency", "daily")
+
+    def at(day: datetime.date) -> datetime.datetime:
+        return datetime.datetime(day.year, day.month, day.day, hour, minute, tzinfo=app_timezone)
+
+    today = now.date()
+    if freq == "weekly":
+        day_map = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
+        target = day_map.get(config.get("day_of_week", "mon"), 0)
+        for offset in range(0, 8):
+            candidate = at(today + datetime.timedelta(days=offset))
+            if candidate.weekday() == target and candidate > now:
+                return candidate
+        return None
+    if freq == "monthly":
+        try:
+            dom = max(1, min(31, int(config.get("day_of_month", 1))))
+        except Exception:
+            dom = 1
+        year, month = today.year, today.month
+        for _ in range(0, 3):
+            last_day = calendar.monthrange(year, month)[1]
+            candidate = at(datetime.date(year, month, min(dom, last_day)))
+            if candidate > now:
+                return candidate
+            month += 1
+            if month > 12:
+                month, year = 1, year + 1
+        return None
+    # daily
+    candidate = at(today)
+    if candidate <= now:
+        candidate = at(today + datetime.timedelta(days=1))
+    return candidate
+
+
 def validate_time(s: str) -> str:
     """Validate HH:MM time format and clamp to valid 24h range on parse errors."""
     try:
@@ -381,6 +701,57 @@ def validate_time(s: str) -> str:
     h = max(0, min(23, h))
     m = max(0, min(59, m))
     return f"{h:02d}:{m:02d}"
+
+
+_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+_TLS_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
+
+def _sanitize_label(value) -> str:
+    """Return a safe Docker label key or empty string (= protection disabled)."""
+    value = (str(value or "")).strip()
+    return value if _LABEL_RE.match(value) else ""
+
+
+def _valid_tls_name(value) -> bool:
+    """TLS cert folder names are simple names below CERTS_ROOT (empty = no TLS)."""
+    return value in ("", None) or bool(_TLS_NAME_RE.match(str(value)))
+
+
+def prune_filters(kind: str) -> dict:
+    """Build Docker prune filters honoring the protect label and minimum age.
+
+    kind: containers | images | networks | volumes | build_cache
+    """
+    filters: dict = {}
+    label = config.get("protect_label") or ""
+    try:
+        age = int(config.get("min_age_hours") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    if label and kind in ("containers", "images", "networks", "volumes"):
+        filters["label!"] = [label]
+    if age > 0 and kind in ("containers", "images", "networks", "build_cache"):
+        filters["until"] = f"{age}h"
+    return filters
+
+
+def _is_protected(labels: dict | None) -> bool:
+    label = config.get("protect_label") or ""
+    return bool(label) and bool(labels) and label in labels
+
+
+def _old_enough(created) -> bool:
+    try:
+        age = int(config.get("min_age_hours") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    if age <= 0:
+        return True
+    dt = parse_docker_time(created)
+    if dt is None:
+        return True
+    return dt <= datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=age)
 
 
 def _deep_merge(base: dict, override: dict) -> None:
@@ -415,6 +786,8 @@ def effective_config():
         "prune_networks": config.get("prune_networks"),
         "prune_volumes": config.get("prune_volumes"),
         "prune_build_cache": config.get("prune_build_cache"),
+        "protect_label": config.get("protect_label"),
+        "min_age_hours": config.get("min_age_hours"),
         "docker_hosts": config.get("docker_hosts"),
         "notifications": config.get("notifications"),
     }
@@ -529,6 +902,15 @@ def load_config(silent=False):
                     host["url"] = "tcp://localhost:2375"
                 if "enabled" not in host:
                     host["enabled"] = True
+                if not _valid_tls_name(host.get("tls", "")):
+                    host["tls"] = ""
+
+            # Validate exclusion settings
+            merged["protect_label"] = _sanitize_label(merged.get("protect_label", ""))
+            try:
+                merged["min_age_hours"] = max(0, min(87600, int(merged.get("min_age_hours") or 0)))
+            except (TypeError, ValueError):
+                merged["min_age_hours"] = 0
 
             config = merged
             if not silent:
@@ -543,8 +925,27 @@ def load_config(silent=False):
             config = json.loads(json.dumps(DEFAULT_CONFIG))
 
 
-def save_config():
-    """Atomic save with fsync and restricted permissions (best-effort)."""
+def config_dir_writable() -> bool:
+    """True when PruneMate can create files in the config directory."""
+    try:
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=str(CONFIG_PATH.parent), prefix=".write-test-", delete=True):
+            pass
+        return True
+    except Exception:
+        return False
+
+
+CONFIG_WRITE_HELP = (
+    f"PruneMate cannot write to {CONFIG_PATH.parent}. Settings, statistics and history will NOT be saved. "
+    "Fix: make the host directory writable for root (e.g. 'sudo chown -R root:root ./config ./logs'), "
+    "or remove 'cap_drop: ALL' from your compose file."
+)
+SAVE_FAILED_MESSAGE = f"Could not save: {CONFIG_PATH.parent} is not writable. Check the logs for how to fix this."
+
+
+def save_config() -> bool:
+    """Atomic save with fsync and restricted permissions. Returns True on success."""
     with config_lock:
         try:
             path = Path(CONFIG_PATH)
@@ -574,6 +975,7 @@ def save_config():
                 # atomic replace
                 tmp_path.replace(path)
                 log(f"Config saved to {path}: {_redact_for_log(config_to_save)}")
+                return True
             finally:
                 # cleanup leftover temp if any
                 if tmp_path and tmp_path.exists() and tmp_path != path:
@@ -582,7 +984,19 @@ def save_config():
                     except Exception:
                         pass
         except Exception as e:
-            log(f"Failed to save config to {CONFIG_PATH}: {e}")
+            log(f"ERROR: Failed to save config to {CONFIG_PATH}: {e}")
+            return False
+
+
+USER_AGENT = f"PruneMate/{APP_VERSION} (Docker cleanup bot)"
+
+
+def _is_http_url(url: str) -> bool:
+    try:
+        parsed = urllib.parse.urlparse(url)
+        return parsed.scheme in ("http", "https") and bool(parsed.hostname)
+    except Exception:
+        return False
 
 
 def _send_gotify(cfg: dict, title: str, message: str, priority: str = "medium") -> bool:
@@ -600,9 +1014,18 @@ def _send_gotify(cfg: dict, title: str, message: str, priority: str = "medium") 
     priority_map = {"low": 2, "medium": 5, "high": 8}
     gotify_priority = priority_map.get(priority, 2)
     
-    endpoint = url.rstrip("/") + "/message?token=" + token
+    if not _is_http_url(url):
+        log("Gotify URL must start with http:// or https://; skipping.")
+        return False
+    # Send the token as a header (not in the query string) so it doesn't end up in proxy/access logs
+    endpoint = url.rstrip("/") + "/message"
     payload = json.dumps({"title": title, "message": message, "priority": gotify_priority}).encode("utf-8")
-    req = urllib.request.Request(endpoint, data=payload, headers={"Content-Type": "application/json"}, method="POST")
+    req = urllib.request.Request(
+        endpoint,
+        data=payload,
+        headers={"Content-Type": "application/json", "X-Gotify-Key": token, "User-Agent": USER_AGENT},
+        method="POST",
+    )
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             log(f"Gotify notification sent, status={getattr(resp, 'status', '?')}")
@@ -629,9 +1052,13 @@ def _send_ntfy(cfg: dict, title: str, message: str, priority: str = "medium") ->
     priority_map = {"low": 2, "medium": 3, "high": 5}
     ntfy_priority = priority_map.get(priority, 2)
     
+    if not _is_http_url(url):
+        log("ntfy URL must start with http:// or https://; skipping.")
+        return False
+
     # Parse URL to extract authentication
     parsed = urllib.parse.urlparse(url)
-    headers = {"Title": title, "Priority": str(ntfy_priority), "Content-Type": "text/plain"}
+    headers = {"Title": title, "Priority": str(ntfy_priority), "Content-Type": "text/plain", "User-Agent": USER_AGENT}
     
     # Priority 1: Use explicit token if provided (Bearer token auth)
     if token:
@@ -683,7 +1110,7 @@ def _send_discord(cfg: dict, title: str, message: str, priority: str = "medium")
     # Validate webhook URL format
     if not webhook_url.startswith("https://discord.com/api/webhooks/") and \
        not webhook_url.startswith("https://discordapp.com/api/webhooks/"):
-        log(f"Invalid Discord webhook URL format: {webhook_url[:50]}...")
+        log("Invalid Discord webhook URL format (must start with https://discord.com/api/webhooks/).")
         return False
     
     # Map priority to Discord color (embed left border color)
@@ -709,7 +1136,7 @@ def _send_discord(cfg: dict, title: str, message: str, priority: str = "medium")
     # Discord requires proper headers including User-Agent
     headers = {
         "Content-Type": "application/json",
-        "User-Agent": "PruneMate/1.3.0 (Docker cleanup bot)"
+        "User-Agent": USER_AGENT
     }
     req = urllib.request.Request(webhook_url, data=data, headers=headers, method="POST")
     try:
@@ -748,7 +1175,7 @@ def _send_telegram(cfg: dict, title: str, message: str, priority: str = "medium"
     disable_notification = (priority == "low")
     
     # Format message with title
-    full_message = f"<b>{title}</b>\n\n{message}"
+    full_message = f"<b>{html.escape(title)}</b>\n\n{html.escape(message)}"
     
     # Telegram Bot API endpoint
     api_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -765,7 +1192,7 @@ def _send_telegram(cfg: dict, title: str, message: str, priority: str = "medium"
         data=payload,
         headers={
             "Content-Type": "application/json",
-            "User-Agent": "PruneMate/1.3.2 (Docker cleanup bot)"
+            "User-Agent": USER_AGENT
         },
         method="POST"
     )
@@ -800,25 +1227,61 @@ def send_notification(title: str, message: str, priority: str = "medium") -> boo
     return False
 
 
-def create_docker_client(host_url: str):
+def _tls_config_for(tls_name: str):
+    """Build a TLSConfig from CERTS_ROOT/<tls_name>/{ca,cert,key}.pem (mutual TLS, verified)."""
+    if not tls_name:
+        return None
+    if not _valid_tls_name(tls_name):
+        raise ValueError("Invalid TLS folder name")
+    # The name regex forbids '/' and leading dots, so the folder is always a direct child
+    # of CERTS_ROOT. Symlinked folders (e.g. Kubernetes secret mounts) are allowed.
+    folder = CERTS_ROOT / tls_name
+    if folder.parent != CERTS_ROOT:
+        raise ValueError("TLS folder must be a direct child of the certificates directory")
+    ca, cert, key = folder / "ca.pem", folder / "cert.pem", folder / "key.pem"
+    missing = [p.name for p in (ca, cert, key) if not p.is_file()]
+    if missing:
+        raise FileNotFoundError(f"Missing TLS file(s) in {folder}: {', '.join(missing)}")
+    return docker.tls.TLSConfig(client_cert=(str(cert), str(key)), ca_cert=str(ca), verify=True)
+
+
+def _is_local_entry(host: dict) -> bool:
+    return host.get("name") == "Local" or "unix://" in (host.get("url") or "")
+
+
+def local_host_entry() -> dict:
+    return {"name": "Local", "url": LOCAL_DOCKER_URL, "enabled": True, "tls": ""}
+
+
+def get_all_hosts(include_disabled: bool = False) -> list:
+    """Return the Local host followed by the configured external hosts."""
+    external = [
+        h for h in config.get("docker_hosts", [])
+        if not _is_local_entry(h) and (include_disabled or h.get("enabled", True))
+    ]
+    return [local_host_entry()] + external
+
+
+def create_docker_client(host_url: str, tls_name: str = ""):
     """Create a Docker client for the given host URL.
-    
+
     Args:
         host_url: Docker host URL (e.g., 'unix:///var/run/docker.sock', 'tcp://host:2375')
-    
+        tls_name: optional folder name below CERTS_ROOT with ca.pem/cert.pem/key.pem
+
     Returns:
         Docker client instance or None on failure
     """
     if docker is None:
         log("Docker SDK not available.")
         return None
-    
+
     try:
-        # Support both unix sockets and TCP connections
         if host_url.startswith("unix://"):
             return docker.DockerClient(base_url=host_url)
-        elif host_url.startswith("tcp://") or host_url.startswith("http://") or host_url.startswith("https://"):
-            client = docker.DockerClient(base_url=host_url, timeout=5)
+        if host_url.startswith(("tcp://", "http://", "https://")):
+            tls = _tls_config_for(tls_name) if tls_name else False
+            client = docker.DockerClient(base_url=host_url, timeout=5, tls=tls)
             try:
                 if not client.ping():
                     raise ConnectionError("Docker host did not respond to ping")
@@ -827,277 +1290,315 @@ def create_docker_client(host_url: str):
                 raise
             client.api.timeout = 60
             return client
-        else:
-            # Fallback: try as-is
-            return docker.DockerClient(base_url=host_url)
+        log(f"Unsupported Docker host URL scheme: {host_url}")
+        return None
     except Exception as e:
         log(f"Failed to create Docker client for {host_url}: {e}")
         return None
 
 
+def _empty_preview(host_name: str, error: str) -> dict:
+    return {
+        "name": host_name,
+        "success": False,
+        "error": error,
+        "containers": [],
+        "images": [],
+        "networks": [],
+        "volumes": [],
+        "build_cache": [],
+        "protected": 0,
+    }
+
+
+def _preview_host(client, host_name: str) -> dict:
+    """Collect what would be pruned on one host, honoring label/age exclusions."""
+    containers_list, images_list, networks_list, volumes_list, build_cache_list = [], [], [], [], []
+    protected = 0
+
+    all_containers = []
+    if any(config.get(k) for k in ("prune_containers", "prune_images", "prune_networks", "prune_volumes")):
+        try:
+            all_containers = client.containers.list(all=True)
+        except Exception as e:
+            log(f"[{host_name}] Error listing containers: {e}")
+
+    # Containers: stopped (exited, dead, created) - matches containers.prune()
+    if config.get("prune_containers"):
+        for c in all_containers:
+            if c.status not in ("exited", "dead", "created"):
+                continue
+            if _is_protected(c.labels) or not _old_enough(c.attrs.get("Created")):
+                protected += 1
+                continue
+            containers_list.append({"id": c.short_id, "name": c.name, "status": c.status})
+
+    # Images: all images not used by any container - matches images.prune(dangling=False)
+    if config.get("prune_images"):
+        try:
+            used_image_ids = {c.attrs.get("Image") for c in all_containers if c.attrs.get("Image")}
+            for img in client.images.list():
+                if img.id in used_image_ids:
+                    continue
+                if _is_protected(img.labels) or not _old_enough(img.attrs.get("Created")):
+                    protected += 1
+                    continue
+                images_list.append({
+                    "id": img.short_id,
+                    "tags": img.tags[:3] if img.tags else ["<none>"],
+                    "size": human_bytes(img.attrs.get("Size", 0)),
+                })
+        except Exception as e:
+            log(f"[{host_name}] Error listing images: {e}")
+
+    # Networks: custom networks not referenced by any container
+    if config.get("prune_networks"):
+        try:
+            used_network_ids = set()
+            for c in all_containers:
+                for net_info in (c.attrs.get("NetworkSettings", {}) or {}).get("Networks", {}).values():
+                    if net_info.get("NetworkID"):
+                        used_network_ids.add(net_info["NetworkID"])
+            for net in client.networks.list():
+                if net.name in ("bridge", "host", "none", "ingress", "docker_gwbridge") or net.id in used_network_ids:
+                    continue
+                if _is_protected(net.attrs.get("Labels")) or not _old_enough(net.attrs.get("Created")):
+                    protected += 1
+                    continue
+                networks_list.append({"id": net.short_id, "name": net.name})
+        except Exception as e:
+            log(f"[{host_name}] Error listing networks: {e}")
+
+    # Volumes: all volumes (incl. named) not mounted by any container
+    if config.get("prune_volumes"):
+        try:
+            used_volume_names = set()
+            for c in all_containers:
+                for mount in c.attrs.get("Mounts", []) or []:
+                    if mount.get("Type") == "volume":
+                        used_volume_names.add(mount.get("Name"))
+            for v in client.volumes.list() or []:
+                if v.name in used_volume_names:
+                    continue
+                if _is_protected(v.attrs.get("Labels")):
+                    protected += 1
+                    continue
+                volumes_list.append({"name": v.name, "driver": v.attrs.get("Driver", "local")})
+        except Exception as e:
+            log(f"[{host_name}] Error listing volumes: {e}")
+
+    # Build cache: reclaimable entries from df()
+    if config.get("prune_build_cache"):
+        try:
+            for c in client.api.df().get("BuildCache", []) or []:
+                # Match `docker builder prune` (without --all): entries in use or shared with
+                # an existing image are kept, so don't list them as "will be pruned".
+                if c.get("InUse") or c.get("Shared") or c.get("Reclaimable") is False:
+                    continue
+                if not _old_enough(c.get("LastUsedAt") or c.get("CreatedAt")):
+                    protected += 1
+                    continue
+                build_cache_list.append({
+                    "id": (c.get("ID") or "")[:12],
+                    "type": c.get("Type", "unknown"),
+                    "size": human_bytes(c.get("Size", 0)),
+                })
+        except Exception as e:
+            log(f"[{host_name}] Error listing build cache: {e}")
+
+    return {
+        "name": host_name,
+        "success": True,
+        "containers": containers_list,
+        "images": images_list,
+        "networks": networks_list,
+        "volumes": volumes_list,
+        "build_cache": build_cache_list,
+        "protected": protected,
+        "totals": {
+            "containers": len(containers_list),
+            "images": len(images_list),
+            "networks": len(networks_list),
+            "volumes": len(volumes_list),
+            "build_cache": len(build_cache_list),
+        },
+    }
+
+
+def _any_prune_option() -> bool:
+    return any(config.get(k) for k in (
+        "prune_containers", "prune_images", "prune_networks", "prune_volumes", "prune_build_cache"
+    ))
+
+
 def get_prune_preview() -> dict:
     """Get a preview of what would be pruned without actually pruning.
-    
+
     Returns a dict with preview results per host and aggregate totals.
     """
     load_config(silent=True)
-    
-    if not any([
-        config.get("prune_containers"),
-        config.get("prune_images"),
-        config.get("prune_networks"),
-        config.get("prune_volumes"),
-        config.get("prune_build_cache"),
-    ]):
+
+    if not _any_prune_option():
         return {"error": "No prune options selected", "hosts": []}
-    
     if docker is None:
         return {"error": "Docker SDK not available", "hosts": []}
-    
-    # Get all hosts (local + external)
-    docker_hosts = config.get("docker_hosts", [])
-    enabled_external_hosts = [
-        h for h in docker_hosts 
-        if h.get("enabled", True) and h.get("name") != "Local" and "unix://" not in h.get("url", "")
-    ]
-    
-    all_hosts = [
-        {"name": "Local", "url": "unix:///var/run/docker.sock", "enabled": True}
-    ] + enabled_external_hosts
-    
+
     preview_results = []
-    total_containers = 0
-    total_images = 0
-    total_networks = 0
-    total_volumes = 0
-    total_build_cache = 0
-    
-    for host in all_hosts:
+    totals = {"containers": 0, "images": 0, "networks": 0, "volumes": 0, "build_cache": 0}
+    protected_total = 0
+
+    for host in get_all_hosts():
         host_name = host.get("name", "Unnamed")
-        host_url = host.get("url", "unix:///var/run/docker.sock")
-        
         client = None
         try:
-            client = create_docker_client(host_url)
+            client = create_docker_client(host.get("url", LOCAL_DOCKER_URL), host.get("tls", ""))
             if client is None:
-                preview_results.append({
-                    "name": host_name,
-                    "url": host_url,
-                    "success": False,
-                    "error": "Failed to connect",
-                    "containers": [],
-                    "images": [],
-                    "networks": [],
-                    "volumes": [],
-                    "build_cache": []
-                })
+                preview_results.append(_empty_preview(host_name, "Failed to connect"))
                 continue
-            
-            containers_list = []
-            images_list = []
-            networks_list = []
-            volumes_list = []
-            build_cache_list = []
-            
-            # Preview containers (stopped containers)
-            if config.get("prune_containers"):
-                try:
-                    # List all stopped containers (exited, dead, created)
-                    # This matches what containers.prune() actually removes
-                    all_containers = client.containers.list(all=True)
-                    stopped_containers = [c for c in all_containers if c.status in ["exited", "dead", "created"]]
-                    containers_list = [
-                        {"id": c.short_id, "name": c.name, "status": c.status}
-                        for c in stopped_containers
-                    ]
-                except Exception as e:
-                    log(f"[{host_name}] Error listing containers: {e}")
-            
-            # Preview images (all unused images, matching prune behavior)
-            if config.get("prune_images"):
-                try:
-                    # List all unused images (dangling=False means all unused, not just dangling)
-                    # This matches client.images.prune(filters={"dangling": False}) behavior
-                    all_images = client.images.list()
-                    # Get images in use by containers
-                    used_image_ids = set()
-                    for container in client.containers.list(all=True):
-                        img_id = container.attrs.get("Image")
-                        if img_id:
-                            used_image_ids.add(img_id)
-                    
-                    # Filter to unused images only
-                    unused_images = [img for img in all_images if img.id not in used_image_ids]
-                    images_list = [
-                        {
-                            "id": img.short_id,
-                            "tags": img.tags[:3] if img.tags else ["<none>"],
-                            "size": human_bytes(img.attrs.get("Size", 0))
-                        }
-                        for img in unused_images
-                    ]
-                except Exception as e:
-                    log(f"[{host_name}] Error listing images: {e}")
-            
-            # Preview networks (unused networks, excluding default ones)
-            if config.get("prune_networks"):
-                try:
-                    networks = client.networks.list()
-                    unused_networks = []
-                    
-                    # Get list of network IDs used by running containers
-                    running_network_ids = set()
-                    for container in client.containers.list(filters={"status": "running"}):
-                        # Get network settings from container
-                        network_settings = container.attrs.get("NetworkSettings", {}).get("Networks", {})
-                        for net_name, net_info in network_settings.items():
-                            if net_info.get("NetworkID"):
-                                running_network_ids.add(net_info["NetworkID"])
-                    
-                    for net in networks:
-                        # Skip default networks
-                        if net.name in ["bridge", "host", "none"]:
-                            continue
-                        # Skip networks connected to running containers
-                        if net.id in running_network_ids:
-                            continue
-                        # This network is unused and can be pruned
-                        unused_networks.append(net)
-                    
-                    networks_list = [
-                        {"id": net.short_id, "name": net.name}
-                        for net in unused_networks
-                    ]
-                except Exception as e:
-                    log(f"[{host_name}] Error listing networks: {e}")
-            
-            # Preview volumes (unused volumes)
-            if config.get("prune_volumes"):
-                try:
-                    # Get all volumes (can be None in some Docker versions)
-                    all_volumes_result = client.volumes.list()
-                    all_volumes = all_volumes_result if all_volumes_result else []
-                    # Get volumes in use by containers
-                    used_volume_names = set()
-                    for container in client.containers.list(all=True):
-                        for mount in container.attrs.get("Mounts", []):
-                            if mount.get("Type") == "volume":
-                                used_volume_names.add(mount.get("Name"))
-                    
-                    unused_volumes = [v for v in all_volumes if v.name not in used_volume_names]
-                    volumes_list = [
-                        {"name": v.name, "driver": v.attrs.get("Driver", "local")}
-                        for v in unused_volumes
-                    ]
-                except Exception as e:
-                    log(f"[{host_name}] Error listing volumes: {e}")
-            
-            # Preview build cache
-            if config.get("prune_build_cache"):
-                try:
-                    # Get build cache usage via Docker API
-                    # We need to do a DRY RUN of the prune operation to see what would be deleted
-                    # because client.api.df() may return cached/stale data
-                    
-                    # Option 1: Use df() but be aware it might show stale data
-                    df_result = client.api.df()
-                    build_cache_info = df_result.get("BuildCache", [])
-                    
-                    # Filter to truly reclaimable entries
-                    # The Reclaimable field is the most accurate indicator
-                    reclaimable_cache = []
-                    for c in build_cache_info:
-                        # Prioritize Reclaimable field if present (most accurate)
-                        if "Reclaimable" in c:
-                            if c["Reclaimable"]:
-                                reclaimable_cache.append(c)
-                        # Fallback: use InUse field
-                        elif not c.get("InUse", False):
-                            reclaimable_cache.append(c)
-                    
-                    build_cache_list = [
-                        {
-                            "id": c.get("ID", "")[:12],  # Short ID like Docker CLI
-                            "type": c.get("Type", "unknown"),
-                            "size": human_bytes(c.get("Size", 0)),
-                            "reclaimable": c.get("Reclaimable", True),
-                            "inUse": c.get("InUse", False)
-                        }
-                        for c in reclaimable_cache
-                    ]
-                    
-                    # Log for debugging
-                    if build_cache_list:
-                        log(f"[{host_name}] Preview found {len(build_cache_list)} reclaimable build cache entries")
-                except Exception as e:
-                    log(f"[{host_name}] Error listing build cache: {e}")
-            
-            total_containers += len(containers_list)
-            total_images += len(images_list)
-            total_networks += len(networks_list)
-            total_volumes += len(volumes_list)
-            total_build_cache += len(build_cache_list)
-            
-            preview_results.append({
-                "name": host_name,
-                "url": host_url,
-                "success": True,
-                "containers": containers_list,
-                "images": images_list,
-                "networks": networks_list,
-                "volumes": volumes_list,
-                "build_cache": build_cache_list,
-                "totals": {
-                    "containers": len(containers_list),
-                    "images": len(images_list),
-                    "networks": len(networks_list),
-                    "volumes": len(volumes_list),
-                    "build_cache": len(build_cache_list)
-                }
-            })
-            
+            result = _preview_host(client, host_name)
+            for key in totals:
+                totals[key] += result["totals"][key]
+            protected_total += result["protected"]
+            preview_results.append(result)
         except Exception as e:
             log(f"[{host_name}] Error getting preview: {e}")
-            preview_results.append({
-                "name": host_name,
-                "url": host_url,
-                "success": False,
-                "error": str(e),
-                "containers": [],
-                "images": [],
-                "networks": [],
-                "volumes": [],
-                "build_cache": []
-            })
+            preview_results.append(_empty_preview(host_name, "Unexpected error while building preview (see logs)"))
         finally:
             if client is not None:
                 try:
                     client.close()
                 except Exception:
                     pass
-    
+
     return {
         "hosts": preview_results,
-        "totals": {
-            "containers": total_containers,
-            "images": total_images,
-            "networks": total_networks,
-            "volumes": total_volumes,
-            "build_cache": total_build_cache
-        }
+        "totals": totals,
+        "protected": protected_total,
+        "protect_label": config.get("protect_label") or "",
+        "min_age_hours": config.get("min_age_hours") or 0,
     }
 
 
-def run_prune_job(origin: str = "unknown", wait: bool = False) -> bool:
-    """Execute Docker pruning based on current configuration."""
+def _prune_host(client, host_name: str, allow_volumes: bool = True) -> dict:
+    """Run the enabled prune operations on one host and return the counts.
+
+    allow_volumes=False skips volume pruning even when enabled (manual run without confirmation).
+    """
+    result = {"containers": 0, "images": 0, "networks": 0, "volumes": 0, "build_cache": 0, "space": 0}
+
+    if config.get("prune_containers"):
+        try:
+            log(f"[{host_name}] Pruning containers…")
+            r = client.containers.prune(filters=prune_filters("containers") or None)
+            log(f"[{host_name}] Containers prune result: {r}")
+            result["containers"] = len(r.get("ContainersDeleted") or [])
+            result["space"] += int(r.get("SpaceReclaimed") or 0)
+        except Exception as e:
+            log(f"[{host_name}] Error pruning containers: {e}")
+
+    if config.get("prune_images"):
+        try:
+            log(f"[{host_name}] Pruning images (all unused)…")
+            r = client.images.prune(filters={"dangling": False, **prune_filters("images")})
+            log(f"[{host_name}] Images prune result: {r}")
+            result["images"] = len(r.get("ImagesDeleted") or [])
+            result["space"] += int(r.get("SpaceReclaimed") or 0)
+        except Exception as e:
+            log(f"[{host_name}] Error pruning images: {e}")
+
+    if config.get("prune_networks"):
+        try:
+            log(f"[{host_name}] Pruning networks…")
+            r = client.networks.prune(filters=prune_filters("networks") or None)
+            log(f"[{host_name}] Networks prune result: {r}")
+            result["networks"] = len(r.get("NetworksDeleted") or [])
+        except Exception as e:
+            log(f"[{host_name}] Error pruning networks: {e}")
+
+    if config.get("prune_volumes") and not allow_volumes:
+        log(f"[{host_name}] Skipping volumes: manual run without DELETE confirmation.")
+    elif config.get("prune_volumes"):
+        try:
+            log(f"[{host_name}] Pruning volumes (all unused, including named)…")
+            r = client.volumes.prune(filters={"all": True, **prune_filters("volumes")})
+            log(f"[{host_name}] Volumes prune result: {r}")
+            result["volumes"] = len(r.get("VolumesDeleted") or [])
+            result["space"] += int(r.get("SpaceReclaimed") or 0)
+        except Exception as e:
+            log(f"[{host_name}] Error pruning volumes: {e}")
+
+    if config.get("prune_build_cache"):
+        try:
+            log(f"[{host_name}] Pruning build cache…")
+            f = prune_filters("build_cache")
+            try:
+                r = client.api.prune_builds(filters=f) if f else client.api.prune_builds()
+            except TypeError:
+                # Older Docker SDKs don't accept filters for builder prune
+                r = client.api.prune_builds()
+            log(f"[{host_name}] Build cache prune result: {r}")
+            result["build_cache"] = len(r.get("CachesDeleted") or [])
+            result["space"] += int(r.get("SpaceReclaimed") or 0)
+        except Exception as e:
+            log(f"[{host_name}] Error pruning build cache: {e}")
+
+    return result
+
+
+def _build_summary(all_hosts: list, host_results: list, totals: dict, anything_deleted: bool) -> str:
+    """Build the notification text with a per-host breakdown."""
+    labels = (
+        ("containers", "Containers"), ("images", "Images"), ("networks", "Networks"),
+        ("volumes", "Volumes"), ("build_cache", "Build caches"),
+    )
+    lines = [f"Schedule: {describe_schedule()}", ""]
+    if len(all_hosts) > 1:
+        lines.append("Results by host")
+
+    hosts_with_deletions = sum(
+        1 for r in host_results if r.get("success") and any(r.get(k) for k, _ in labels)
+    )
+
+    for r in host_results:
+        if not r.get("success"):
+            lines.append(f"{r['name']}: Error - {r.get('error', 'Unknown error')}")
+            continue
+        if any(r.get(k) for k, _ in labels):
+            lines.append(r["name"])
+            for key, label in labels:
+                if r.get(key):
+                    lines.append(f"  - {label}: {r[key]}")
+            if r.get("space"):
+                lines.append(f"  - Space reclaimed: {human_bytes(r['space'])}")
+        else:
+            lines.append(f"{r['name']}: Nothing to prune")
+
+    if len(all_hosts) > 1 and hosts_with_deletions != 1:
+        lines.append("")
+        lines.append("Totals across all hosts")
+        if anything_deleted:
+            for key, label in labels:
+                if totals.get(key):
+                    lines.append(f"  - {label}: {totals[key]}")
+            if totals.get("space"):
+                lines.append(f"  - Space reclaimed: {human_bytes(totals['space'])}")
+        else:
+            lines.append("Nothing to prune in this run")
+    return "\n".join(lines)
+
+
+def run_prune_job(origin: str = "unknown", wait: bool = False, allow_volumes: bool = True):
+    """Execute Docker pruning based on current configuration.
+
+    Returns the run record (dict, truthy) when the job ran, or False when it was skipped.
+    """
     # Ensure we have the latest config before running prune job
     load_config(silent=True)
-    
+
     lock = FileLock(str(LOCK_FILE))
     acquired = False
     try:
         if wait:
-            # Try fast path first
             try:
                 lock.acquire(timeout=0)
                 acquired = True
@@ -1121,172 +1622,45 @@ def run_prune_job(origin: str = "unknown", wait: bool = False) -> bool:
         log("Starting prune job with configuration:")
         log(str(_redact_for_log(effective_config())))
 
-        if not any([
-            config.get("prune_containers"),
-            config.get("prune_images"),
-            config.get("prune_networks"),
-            config.get("prune_volumes"),
-            config.get("prune_build_cache"),
-        ]):
+        if not _any_prune_option():
             log("No prune options selected. Job skipped.")
             return False
-
         if docker is None:
             log("Docker SDK not available; aborting prune.")
             return False
 
-        # Always include local Docker socket + external hosts from config
-        docker_hosts = config.get("docker_hosts", [])
-        # Filter out any 'Local' entries from config to prevent duplicates
-        enabled_external_hosts = [
-            h for h in docker_hosts 
-            if h.get("enabled", True) and h.get("name") != "Local" and "unix://" not in h.get("url", "")
-        ]
-        
-        # Build complete host list: local socket first, then external hosts
-        all_hosts = [
-            {"name": "Local", "url": "unix:///var/run/docker.sock", "enabled": True}
-        ] + enabled_external_hosts
-        
-        log(f"Processing {len(all_hosts)} host(s) (1 local + {len(enabled_external_hosts)} external)...")
-        
-        # Aggregate totals across all hosts
-        total_containers_deleted = 0
-        total_images_deleted = 0
-        total_networks_deleted = 0
-        total_volumes_deleted = 0
-        total_build_cache_deleted = 0
-        total_space_reclaimed = 0
-        
-        # Per-host results for detailed reporting
+        started = time.monotonic()
+        all_hosts = get_all_hosts()
+        log(f"Processing {len(all_hosts)} host(s) (1 local + {len(all_hosts) - 1} external)...")
+
+        totals = {"containers": 0, "images": 0, "networks": 0, "volumes": 0, "build_cache": 0, "space": 0}
         host_results = []
-        
+
         for host in all_hosts:
             host_name = host.get("name", "Unnamed")
-            host_url = host.get("url", "unix:///var/run/docker.sock")
-            
+            host_url = host.get("url", LOCAL_DOCKER_URL)
             log(f"--- Processing host: {host_name} ({host_url}) ---")
-            
+
             client = None
             try:
-                client = create_docker_client(host_url)
+                client = create_docker_client(host_url, host.get("tls", ""))
                 if client is None:
                     log(f"Failed to connect to {host_name}; skipping this host.")
-                    host_results.append({
-                        "name": host_name,
-                        "url": host_url,
-                        "success": False,
-                        "error": "Failed to connect",
-                        "containers": 0,
-                        "images": 0,
-                        "networks": 0,
-                        "volumes": 0,
-                        "build_cache": 0,
-                        "space": 0,
-                    })
+                    host_results.append({"name": host_name, "success": False, "error": "Failed to connect",
+                                         **{k: 0 for k in totals}})
                     continue
-                
-                containers_deleted = images_deleted = networks_deleted = volumes_deleted = build_cache_deleted = 0
-                space_reclaimed = 0
 
-                # Containers
-                if config.get("prune_containers"):
-                    try:
-                        log(f"[{host_name}] Pruning containers…")
-                        r = client.containers.prune()
-                        log(f"[{host_name}] Containers prune result: {r}")
-                        containers_deleted = len(r.get("ContainersDeleted") or [])
-                        space_reclaimed += int(r.get("SpaceReclaimed") or 0)
-                    except Exception as e:
-                        log(f"[{host_name}] Error pruning containers: {e}")
-
-                # Images
-                if config.get("prune_images"):
-                    try:
-                        log(f"[{host_name}] Pruning images (all unused)…")
-                        r = client.images.prune(filters={"dangling": False})
-                        log(f"[{host_name}] Images prune result: {r}")
-                        deleted_list = r.get("ImagesDeleted") or []
-                        images_deleted = len(deleted_list)
-                        space_reclaimed += int(r.get("SpaceReclaimed") or 0)
-                    except Exception as e:
-                        log(f"[{host_name}] Error pruning images: {e}")
-
-                # Networks
-                if config.get("prune_networks"):
-                    try:
-                        log(f"[{host_name}] Pruning networks…")
-                        r = client.networks.prune()
-                        log(f"[{host_name}] Networks prune result: {r}")
-                        networks_deleted = len(r.get("NetworksDeleted") or [])
-                    except Exception as e:
-                        log(f"[{host_name}] Error pruning networks: {e}")
-
-                # Volumes
-                if config.get("prune_volumes"):
-                    try:
-                        log(f"[{host_name}] Pruning volumes (all unused, including named)…")
-                        r = client.volumes.prune(filters={"all": True})
-                        log(f"[{host_name}] Volumes prune result: {r}")
-                        # VolumesDeleted is a list of volume names (strings), not dicts
-                        volumes_deleted_list = r.get("VolumesDeleted") or []
-                        volumes_deleted = len(volumes_deleted_list) if volumes_deleted_list else 0
-                        space_reclaimed += int(r.get("SpaceReclaimed") or 0)
-                    except Exception as e:
-                        log(f"[{host_name}] Error pruning volumes: {e}")
-
-                # Build Cache
-                if config.get("prune_build_cache"):
-                    try:
-                        log(f"[{host_name}] Pruning build cache…")
-                        # Use the API client directly for builder prune
-                        # Docker API endpoint: POST /build/prune
-                        r = client.api.prune_builds()
-                        log(f"[{host_name}] Build cache prune result: {r}")
-                        # Count the number of cache objects deleted
-                        cache_ids_deleted = r.get("CachesDeleted") or []
-                        build_cache_deleted = len(cache_ids_deleted) if cache_ids_deleted else 0
-                        space_reclaimed += int(r.get("SpaceReclaimed") or 0)
-                    except Exception as e:
-                        log(f"[{host_name}] Error pruning build cache: {e}")
-
-                log(f"[{host_name}] Prune completed: containers={containers_deleted}, images={images_deleted}, networks={networks_deleted}, volumes={volumes_deleted}, build_cache={build_cache_deleted}, space={human_bytes(space_reclaimed)}")
-                
-                # Add to totals
-                total_containers_deleted += containers_deleted
-                total_images_deleted += images_deleted
-                total_networks_deleted += networks_deleted
-                total_volumes_deleted += volumes_deleted
-                total_build_cache_deleted += build_cache_deleted
-                total_space_reclaimed += space_reclaimed
-                
-                # Record host result
-                host_results.append({
-                    "name": host_name,
-                    "url": host_url,
-                    "success": True,
-                    "containers": containers_deleted,
-                    "images": images_deleted,
-                    "networks": networks_deleted,
-                    "volumes": volumes_deleted,
-                    "build_cache": build_cache_deleted,
-                    "space": space_reclaimed,
-                })
-                
+                result = _prune_host(client, host_name, allow_volumes=allow_volumes)
+                log(f"[{host_name}] Prune completed: containers={result['containers']}, images={result['images']}, "
+                    f"networks={result['networks']}, volumes={result['volumes']}, "
+                    f"build_cache={result['build_cache']}, space={human_bytes(result['space'])}")
+                for key in totals:
+                    totals[key] += result[key]
+                host_results.append({"name": host_name, "success": True, **result})
             except Exception as e:
                 log(f"[{host_name}] Unexpected error during prune: {e}")
-                host_results.append({
-                    "name": host_name,
-                    "url": host_url,
-                    "success": False,
-                    "error": str(e),
-                    "containers": 0,
-                    "images": 0,
-                    "networks": 0,
-                    "volumes": 0,
-                    "build_cache": 0,
-                    "space": 0,
-                })
+                host_results.append({"name": host_name, "success": False, "error": "Unexpected error (see logs)",
+                                     **{k: 0 for k in totals}})
             finally:
                 if client is not None:
                     try:
@@ -1296,93 +1670,40 @@ def run_prune_job(origin: str = "unknown", wait: bool = False) -> bool:
 
         log("Prune job finished for all hosts.")
 
-        anything_deleted = any([
-            total_containers_deleted, total_images_deleted, total_networks_deleted,
-            total_volumes_deleted, total_build_cache_deleted, total_space_reclaimed > 0
-        ])
+        anything_deleted = any(totals[k] for k in ("containers", "images", "networks", "volumes", "build_cache")) \
+            or totals["space"] > 0
 
         # Update all-time statistics (always, even if nothing was pruned)
         update_stats(
-            containers=total_containers_deleted,
-            images=total_images_deleted,
-            networks=total_networks_deleted,
-            volumes=total_volumes_deleted,
-            build_cache=total_build_cache_deleted,
-            space=total_space_reclaimed
+            containers=totals["containers"],
+            images=totals["images"],
+            networks=totals["networks"],
+            volumes=totals["volumes"],
+            build_cache=totals["build_cache"],
+            space=totals["space"],
         )
+
+        record = {
+            "timestamp": datetime.datetime.now(app_timezone).isoformat(timespec="seconds"),
+            "origin": origin,
+            "duration": round(time.monotonic() - started, 1),
+            "success": all(r.get("success") for r in host_results),
+            "totals": totals,
+            "hosts": host_results,
+        }
+        append_history(record)
 
         # Respect only_on_changes for notifications
         if not anything_deleted and config.get("notifications", {}).get("only_on_changes", True):
             log("Nothing was pruned; skipping notification.")
-            return True
+            return record
 
-        # Build notification summary with per-host breakdown
-        summary_lines = [
-            f"Schedule: {describe_schedule()}",
-            "",
-        ]
-        
-        # Add per-host details
-        if len(all_hosts) > 1:
-            summary_lines.append("Results by host")
-
-        hosts_with_deletions = sum(
-            1 for result in host_results
-            if result.get("success") and any(
-                result.get(key)
-                for key in ("containers", "images", "networks", "volumes", "build_cache")
-            )
-        )
-        
-        for result in host_results:
-            if result.get("success"):
-                has_deletions = any([result.get('containers'), result.get('images'), result.get('networks'), result.get('volumes'), result.get('build_cache')])
-                
-                if has_deletions:
-                    summary_lines.append(result['name'])
-                    if result.get('containers'):
-                        summary_lines.append(f"  - Containers: {result['containers']}")
-                    if result.get('images'):
-                        summary_lines.append(f"  - Images: {result['images']}")
-                    if result.get('networks'):
-                        summary_lines.append(f"  - Networks: {result['networks']}")
-                    if result.get('volumes'):
-                        summary_lines.append(f"  - Volumes: {result['volumes']}")
-                    if result.get('build_cache'):
-                        summary_lines.append(f"  - Build caches: {result['build_cache']}")
-                    if result['space']:
-                        summary_lines.append(f"  - Space reclaimed: {human_bytes(result['space'])}")
-                else:
-                    summary_lines.append(f"{result['name']}: Nothing to prune")
-            else:
-                summary_lines.append(f"{result['name']}: Error - {result.get('error', 'Unknown error')}")
-        
-        if len(all_hosts) > 1 and hosts_with_deletions != 1:
-            summary_lines.append("")
-            # Add totals across hosts
-            summary_lines.append("Totals across all hosts")
-            if anything_deleted:
-                if total_containers_deleted:
-                    summary_lines.append(f"  - Containers: {total_containers_deleted}")
-                if total_images_deleted:
-                    summary_lines.append(f"  - Images: {total_images_deleted}")
-                if total_networks_deleted:
-                    summary_lines.append(f"  - Networks: {total_networks_deleted}")
-                if total_volumes_deleted:
-                    summary_lines.append(f"  - Volumes: {total_volumes_deleted}")
-                if total_build_cache_deleted:
-                    summary_lines.append(f"  - Build caches: {total_build_cache_deleted}")
-                if total_space_reclaimed:
-                    summary_lines.append(f"  - Space reclaimed: {human_bytes(total_space_reclaimed)}")
-            else:
-                summary_lines.append("Nothing to prune in this run")
-
-        message = "\n".join(summary_lines)
+        message = _build_summary(all_hosts, host_results, totals, anything_deleted)
         notif_priority = config.get("notifications", {}).get("priority", "medium")
         send_notification("PruneMate run completed", message, priority=notif_priority)
-        
-        return True
-    
+
+        return record
+
     finally:
         if acquired:
             try:
@@ -1495,29 +1816,109 @@ def is_auth_enabled():
     return bool(os.environ.get("PRUNEMATE_AUTH_PASSWORD_HASH"))
 
 
+def _decoded_password_hash(raw: str) -> str:
+    """Accept both Base64-encoded (recommended) and raw Werkzeug hashes."""
+    try:
+        return base64.b64decode(raw, validate=True).decode("utf-8")
+    except Exception:
+        return raw
+
+
 def check_auth(username, password):
-    """Verify username and password against environment variables."""
+    """Verify username and password against environment variables.
+
+    Both the username and the password are always checked so the response time
+    doesn't reveal whether the username was correct.
+    """
     expected_user = os.environ.get("PRUNEMATE_AUTH_USER", "admin")
     password_hash = os.environ.get("PRUNEMATE_AUTH_PASSWORD_HASH")
 
-    if not password_hash:
+    if not password_hash or username is None or password is None:
         return False
 
-    # Check username
-    if username != expected_user:
-        return False
+    user_ok = hmac.compare_digest(str(username).encode("utf-8"), expected_user.encode("utf-8"))
+    try:
+        password_ok = check_password_hash(_decoded_password_hash(password_hash), str(password))
+    except Exception:
+        password_ok = False
+    return user_ok and password_ok
 
-    # Handle Base64 encoded hashes
-    try:
-        password_hash = base64.b64decode(password_hash).decode("utf-8")
-    except Exception:
-        pass
-    
-    # Check password hash
-    try:
-        return check_password_hash(password_hash, password)
-    except Exception:
+
+class LoginRateLimiter:
+    """In-memory sliding-window limiter for failed logins (per client IP)."""
+
+    def __init__(self, max_attempts: int, window_seconds: int, lockout_seconds: int):
+        self.max_attempts = max(1, max_attempts)
+        self.window = window_seconds
+        self.lockout = lockout_seconds
+        self._failures: dict[str, deque] = {}
+        self._locked_until: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def locked_for(self, key: str) -> float:
+        """Seconds until the key is unlocked (0 when not locked)."""
+        with self._lock:
+            until = self._locked_until.get(key, 0)
+            remaining = until - time.monotonic()
+            if remaining <= 0:
+                self._locked_until.pop(key, None)
+                return 0
+            return remaining
+
+    def fail(self, key: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            # Bound memory usage under a flood of distinct IPs
+            if len(self._failures) > 10000:
+                self._failures.clear()
+            q = self._failures.setdefault(key, deque())
+            q.append(now)
+            while q and now - q[0] > self.window:
+                q.popleft()
+            if len(q) >= self.max_attempts:
+                self._locked_until[key] = now + self.lockout
+                q.clear()
+
+    def reset(self, key: str) -> None:
+        with self._lock:
+            self._failures.pop(key, None)
+            self._locked_until.pop(key, None)
+
+
+login_limiter = LoginRateLimiter(
+    max_attempts=_env_int("PRUNEMATE_LOGIN_MAX_ATTEMPTS", 5, minimum=1),
+    window_seconds=300,
+    lockout_seconds=60 * _env_int("PRUNEMATE_LOGIN_LOCKOUT_MINUTES", 5, minimum=1),
+)
+
+
+def _client_ip() -> str:
+    return request.remote_addr or "unknown"
+
+
+def _basic_auth_ok() -> bool:
+    """Validate HTTP Basic credentials (API clients), with brute-force protection."""
+    auth = request.authorization
+    if not auth or auth.type != "basic":
         return False
+    ip = _client_ip()
+    if login_limiter.locked_for(ip):
+        return False
+    if check_auth(auth.username, auth.password):
+        login_limiter.reset(ip)
+        return True
+    login_limiter.fail(ip)
+    log(f"Failed Basic Auth attempt for user '{auth.username}' from {ip}")
+    return False
+
+
+def _api_key_state():
+    """None when no API key is configured; otherwise True/False for the presented key."""
+    expected = (os.environ.get("PRUNEMATE_API_KEY") or "").strip()
+    if not expected:
+        return None
+    sent = request.headers.get("X-API-Key") or request.args.get("api_key") or ""
+    return bool(sent) and hmac.compare_digest(sent.encode("utf-8"), expected.encode("utf-8"))
 
 
 def request_wants_json():
@@ -1526,81 +1927,387 @@ def request_wants_json():
     return best == 'application/json' and request.accept_mimetypes[best] > request.accept_mimetypes['text/html']
 
 
+def _is_fetch() -> bool:
+    """Requests made by the PruneMate UI via fetch() carry this header."""
+    return request.headers.get("X-Requested-With") == "fetch"
+
+
+def _wants_json() -> bool:
+    return _is_fetch() or request.is_json or request_wants_json()
+
+
+def _respond(success: bool, message: str, status: int = 200, **extra):
+    """JSON for the UI (fetch), flash + redirect for classic form posts."""
+    if _wants_json():
+        return jsonify({"success": success, "message": message, **extra}), status
+    flash(message, "info" if success else "warn")
+    return redirect(url_for("index"))
+
+
+def _safe_next(url: str | None) -> str:
+    """Only allow relative, same-origin redirect targets."""
+    if not url:
+        return url_for("index")
+    candidate = url.replace("\\", "/").strip()
+    parsed = urllib.parse.urlparse(candidate)
+    if parsed.scheme or parsed.netloc or not candidate.startswith("/") or candidate.startswith("//"):
+        return url_for("index")
+    return candidate
+
+
+PUBLIC_ENDPOINTS = {"static", "login", "healthz"}
+STATS_ENDPOINTS = {"stats", "api_stats"}
+
+
 @app.before_request
 def require_auth():
     """Intercept requests and ensure user is authenticated."""
+    endpoint = request.endpoint
+
+    if endpoint in PUBLIC_ENDPOINTS:
+        return
+
+    # Stats endpoints (Homepage widget): open unless PRUNEMATE_API_KEY is configured
+    if endpoint in STATS_ENDPOINTS:
+        key_state = _api_key_state()
+        if key_state is None or key_state or session.get("logged_in"):
+            return
+        if is_auth_enabled() and request.authorization and _basic_auth_ok():
+            return
+        return jsonify({"error": "Invalid or missing API key"}), 401
+
     if not is_auth_enabled():
         return
 
-    # Allow static resources, login page, and stats endpoints
-    if request.endpoint in ('static', 'login', 'logout', 'stats', 'api_stats'):
+    if session.get("logged_in"):
         return
 
-    # Check if user is logged in via session
-    if session.get('logged_in'):
+    # API/CLI Clients (Basic Auth)
+    if request.authorization and _basic_auth_ok():
         return
 
-    # API/CLI Clients (Basic Auth) or JSON requests
-    # If Authorization header is present, try Basic Auth
-    auth = request.authorization
-    if auth:
-        if check_auth(auth.username, auth.password):
-            # Session-less auth for API
-            return
-    
-    # If we are here, auth failed or is missing
-    
-    # For API/Robots: Return 401 Basic Auth challenge
-    # Detect if it's likely an API client (User-Agent or Accept header)
+    # UI fetch() calls: plain 401 (no WWW-Authenticate, so the browser doesn't pop up a dialog)
+    if _is_fetch():
+        return jsonify({"success": False, "message": "Session expired. Please sign in again.", "login": url_for("login")}), 401
+
     ua = request.user_agent.string.lower()
     is_browser = any(x in ua for x in ['mozilla', 'chrome', 'safari', 'edge']) and 'curl' not in ua and 'python' not in ua
-    
+
     if not is_browser or request_wants_json() or request.path.startswith('/api/'):
         return Response(
             'Could not verify your access level for that URL.\n'
             'You have to login with proper credentials', 401,
             {'WWW-Authenticate': 'Basic realm="PruneMate Login"'}
         )
-    
+
     # For Browsers: Redirect to login page
-    return redirect(url_for('login'))
+    next_path = request.full_path if request.method == "GET" and request.path != "/" else None
+    return redirect(url_for("login", next=next_path) if next_path else url_for("login"))
+
+
+# ---- CSRF protection ----
+def csrf_token() -> str:
+    """Return (and lazily create) the per-session CSRF token."""
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+app.jinja_env.globals["csrf_token"] = csrf_token
+
+
+@app.before_request
+def csrf_protect():
+    """Reject state-changing requests without a valid CSRF token."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return
+    expected = session.get("_csrf_token")
+    sent = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token") or ""
+    if expected and sent and hmac.compare_digest(str(expected), str(sent)):
+        return
+    log(f"Rejected {request.method} {request.path} from {_client_ip()}: missing or invalid CSRF token")
+    message = "Your session expired or the request token was invalid. Reload the page and try again."
+    if _wants_json():
+        return jsonify({"success": False, "message": message}), 400
+    flash(message, "warn")
+    return redirect(url_for("login") if request.endpoint == "login" else url_for("index"))
+
+
+# ---- Security headers ----
+CONTENT_SECURITY_POLICY = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+])
+
+
+@app.after_request
+def set_security_headers(resp):
+    resp.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "same-origin")
+    resp.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=(), payment=()")
+    resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-origin")
+    if request.endpoint != "static":
+        resp.headers["Cache-Control"] = "no-store"
+    if request.is_secure:
+        # Browsers ignore (and warn about) COOP on plain-HTTP origins
+        resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return resp
+
+
+@app.route("/healthz")
+def healthz():
+    """Lightweight liveness probe for Docker HEALTHCHECK."""
+    return Response("ok", mimetype="text/plain")
 
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
     """Handle login page and authentication."""
+    if not is_auth_enabled():
+        return redirect(url_for("index"))
     if session.get('logged_in'):
         return redirect(url_for('index'))
 
-    if not is_auth_enabled():
-        return redirect(url_for("index"))
-        
+    status = 200
     if request.method == "POST":
-        username = request.form.get("username")
-        password = request.form.get("password")
-        
-        if check_auth(username, password):
-            session['logged_in'] = True
-            session['user'] = username
-            
-            # Use a safe next URL or default to index
-            next_url = request.args.get('next')
-            if not next_url or next_url.startswith('//') or ':' in next_url:
-                next_url = url_for('index')
-            
-            return redirect(next_url)
+        ip = _client_ip()
+        remaining = login_limiter.locked_for(ip)
+        if remaining:
+            minutes = max(1, int((remaining + 59) // 60))
+            flash(f"Too many failed attempts. Try again in {minutes} minute(s).", "error")
+            status = 429
         else:
+            username = request.form.get("username", "")
+            password = request.form.get("password", "")
+            if check_auth(username, password):
+                login_limiter.reset(ip)
+                next_url = _safe_next(request.args.get("next"))
+                # Fresh session on login (new CSRF token, no leftovers)
+                session.clear()
+                session.permanent = True
+                session['logged_in'] = True
+                session['user'] = username
+                session['_csrf_token'] = secrets.token_urlsafe(32)
+                log(f"Successful login for user '{username}' from {ip}")
+                return redirect(next_url)
+            login_limiter.fail(ip)
+            log(f"Failed login attempt for user '{username}' from {ip}")
             flash("Invalid credentials", "error")
-            
-    return render_template("login.html")
+            status = 401
+
+    return render_template("login.html", app_version=APP_VERSION), status
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
     """Clear session and redirect to login."""
     session.clear()
     return redirect(url_for("login"))
 
+
+# ---- Config form helpers ----
+SECRET_FIELDS = {
+    "gotify_token": ("gotify", "token"),
+    "ntfy_token": ("ntfy", "token"),
+    "discord_webhook_url": ("discord", "webhook_url"),
+    "telegram_bot_token": ("telegram", "bot_token"),
+}
+VALID_FREQUENCIES = {"daily", "weekly", "monthly"}
+VALID_DAYS = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+VALID_PROVIDERS = {"gotify", "ntfy", "discord", "telegram"}
+MASK = "********"
+
+
+def _mask_url_password(url: str) -> str:
+    """Hide the password part of user:pass@host URLs for display."""
+    try:
+        parsed = urllib.parse.urlparse(url or "")
+        if not parsed.password:
+            return url or ""
+        netloc = f"{parsed.username or ''}:{MASK}@{parsed.hostname or ''}" + (f":{parsed.port}" if parsed.port else "")
+        return urllib.parse.urlunparse(parsed._replace(netloc=netloc))
+    except Exception:
+        return url or ""
+
+
+def _secret_from_form(field: str, old_value: str) -> str:
+    """Empty secret fields keep the stored value; '<field>_clear=1' removes it."""
+    if request.form.get(f"{field}_clear") == "1":
+        return ""
+    new = (request.form.get(field) or "").strip()
+    return new if new else (old_value or "")
+
+
+def _parse_time_from_form() -> str:
+    if use_24h_format:
+        return validate_time(request.form.get("time", "03:00"))
+    try:
+        hour_12 = max(1, min(12, int(request.form.get("time_hour", "3"))))
+        minute = max(0, min(59, int(request.form.get("time_minute", "0"))))
+        period = request.form.get("time_period", "AM")
+        if period == "AM":
+            hour_24 = 0 if hour_12 == 12 else hour_12
+        else:
+            hour_24 = 12 if hour_12 == 12 else hour_12 + 12
+        return f"{hour_24:02d}:{minute:02d}"
+    except Exception:
+        return "03:00"
+
+
+def _config_from_form(old: dict) -> tuple[dict, list]:
+    """Parse and validate the main settings form. Returns (new_values, errors)."""
+    errors = []
+    old_notif = old.get("notifications", {})
+
+    frequency = request.form.get("frequency", "daily")
+    if frequency not in VALID_FREQUENCIES:
+        frequency = "daily"
+    day_of_week = request.form.get("day_of_week", "mon")
+    if day_of_week not in VALID_DAYS:
+        day_of_week = "mon"
+    try:
+        day_of_month = max(1, min(31, int(request.form.get("day_of_month", "1"))))
+    except Exception:
+        day_of_month = 1
+
+    # Exclusions
+    protect_label = ""
+    if "protect_label_enabled" in request.form:
+        raw_label = (request.form.get("protect_label") or "").strip() or "prunemate.keep"
+        protect_label = _sanitize_label(raw_label)
+        if not protect_label:
+            errors.append("Protect label may only contain letters, digits, '.', '_', '-' and '/'.")
+    try:
+        min_age_hours = max(0, min(87600, int(request.form.get("min_age_hours") or 0)))
+    except (TypeError, ValueError):
+        min_age_hours = 0
+
+    provider = request.form.get("notifications_provider", "gotify")
+    if provider not in VALID_PROVIDERS:
+        provider = "gotify"
+
+    def old_val(provider_key, key):
+        return (old_notif.get(provider_key) or {}).get(key, "")
+
+    gotify_url = (request.form.get("gotify_url") or "").strip()
+    ntfy_url = (request.form.get("ntfy_url") or "").strip()
+    old_ntfy_url = old_val("ntfy", "url")
+    if old_ntfy_url and ntfy_url == _mask_url_password(old_ntfy_url):
+        ntfy_url = old_ntfy_url  # unchanged masked value -> keep stored credentials
+
+    for label, url in (("Gotify URL", gotify_url), ("ntfy URL", ntfy_url)):
+        if url and not _is_http_url(url):
+            errors.append(f"{label} must start with http:// or https://")
+
+    secrets_new = {field: _secret_from_form(field, old_val(*path)) for field, path in SECRET_FIELDS.items()}
+    discord_webhook_url = secrets_new["discord_webhook_url"]
+    if discord_webhook_url and not discord_webhook_url.startswith(
+            ("https://discord.com/api/webhooks/", "https://discordapp.com/api/webhooks/")):
+        errors.append("Discord webhook URL must start with https://discord.com/api/webhooks/")
+
+    gotify_enabled = "gotify_enabled" in request.form
+    ntfy_enabled = "ntfy_enabled" in request.form
+    ntfy_topic = (request.form.get("ntfy_topic") or "").strip()
+    discord_enabled = "discord_enabled" in request.form
+    telegram_enabled = "telegram_enabled" in request.form
+    telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
+
+    # Auto-enable selected provider if fields are filled but toggle was forgotten
+    if provider == "gotify" and not gotify_enabled and gotify_url and secrets_new["gotify_token"]:
+        gotify_enabled = True
+    if provider == "ntfy" and not ntfy_enabled and ntfy_url and ntfy_topic:
+        ntfy_enabled = True
+    if provider == "discord" and not discord_enabled and discord_webhook_url:
+        discord_enabled = True
+    if provider == "telegram" and not telegram_enabled and secrets_new["telegram_bot_token"] and telegram_chat_id:
+        telegram_enabled = True
+
+    notification_priority = (request.form.get("notification_priority") or "medium").strip().lower()
+    if notification_priority not in ("low", "medium", "high"):
+        notification_priority = "medium"
+
+    new_values = {
+        "schedule_enabled": "schedule_enabled" in request.form,
+        "frequency": frequency,
+        "time": _parse_time_from_form(),
+        "day_of_week": day_of_week,
+        "day_of_month": day_of_month,
+        "prune_containers": "prune_containers" in request.form,
+        "prune_images": "prune_images" in request.form,
+        "prune_networks": "prune_networks" in request.form,
+        "prune_volumes": "prune_volumes" in request.form,
+        "prune_build_cache": "prune_build_cache" in request.form,
+        "protect_label": protect_label,
+        "min_age_hours": min_age_hours,
+        "notifications": {
+            "provider": provider,
+            "gotify": {"enabled": gotify_enabled, "url": gotify_url, "token": secrets_new["gotify_token"]},
+            "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": secrets_new["ntfy_token"]},
+            "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
+            "telegram": {"enabled": telegram_enabled, "bot_token": secrets_new["telegram_bot_token"], "chat_id": telegram_chat_id},
+            "priority": notification_priority,
+            "only_on_changes": "notifications_only_on_changes" in request.form,
+        },
+    }
+    return new_values, errors
+
+
+def with_config_lock(func):
+    """Run a read-modify-write of the config atomically w.r.t. other threads.
+
+    load_config() replaces the global config object; without the lock another request
+    (dashboard poll, heartbeat) could swap it between update and save, losing changes.
+    """
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with config_lock:
+            return func(*args, **kwargs)
+    return wrapper
+
+
+@with_config_lock
+def _save_form_config() -> list:
+    """Apply the submitted settings form. Returns a list of validation errors (empty on success)."""
+    load_config(silent=True)
+    old_config = json.loads(json.dumps(config))
+    new_values, errors = _config_from_form(old_config)
+    if errors:
+        return errors
+
+    schedule_keys = [
+        "schedule_enabled", "frequency", "time", "day_of_week", "day_of_month",
+        "prune_containers", "prune_images", "prune_networks", "prune_volumes", "prune_build_cache",
+    ]
+    schedule_changed = any(new_values[k] != old_config.get(k) for k in schedule_keys)
+    config.update(new_values)
+    if schedule_changed:
+        # Clear last-run key so the next scheduled window can fire
+        _clear_last_run_key()
+    if not save_config():
+        return [SAVE_FAILED_MESSAGE]
+    return []
+
+
+def _schedule_payload() -> dict:
+    next_run = compute_next_run()
+    return {
+        "next_run": next_run.isoformat() if next_run else None,
+        "schedule_text": describe_schedule(),
+        "schedule_enabled": bool(config.get("schedule_enabled", True)),
+    }
 
 
 @app.route("/")
@@ -1608,309 +2315,97 @@ def index():
     """Render the main configuration page."""
     # Reload config to ensure we show the latest settings across workers
     load_config(silent=True)
-    return render_template("index.html", config=config, timezone=tz_name, config_path=CONFIG_PATH, use_24h=use_24h_format)
+    notif = config.get("notifications", {})
+    secret_state = {field: bool((notif.get(p) or {}).get(k)) for field, (p, k) in SECRET_FIELDS.items()}
+    return render_template(
+        "index.html",
+        config=config,
+        timezone=tz_name,
+        use_24h=use_24h_format,
+        app_version=APP_VERSION,
+        auth_enabled=is_auth_enabled(),
+        secret_state=secret_state,
+        ntfy_url_display=_mask_url_password((notif.get("ntfy") or {}).get("url", "")),
+        config_writable=config_dir_writable(),
+        config_dir=str(CONFIG_PATH.parent),
+        current_year=datetime.datetime.now(app_timezone).year,
+    )
 
 
 @app.route("/update", methods=["POST"])
 def update():
     """Handle configuration updates from the web form."""
-    # Reload config to get the latest state before applying changes
-    load_config(silent=True)
-    old_config = json.loads(json.dumps(config))
-
-    frequency = request.form.get("frequency", "daily")
-    
-    # Handle both 24h and 12h time formats
-    if use_24h_format:
-        time_value = request.form.get("time", "03:00")
-    else:
-        # Convert 12h format (hour, minute, period) to 24h format
-        try:
-            hour_12 = int(request.form.get("time_hour", "3"))
-            minute = int(request.form.get("time_minute", "0"))
-            period = request.form.get("time_period", "AM")
-            
-            # Validate ranges
-            hour_12 = max(1, min(12, hour_12))
-            minute = max(0, min(59, minute))
-            
-            # Convert to 24h
-            if period == "AM":
-                hour_24 = 0 if hour_12 == 12 else hour_12
-            else:  # PM
-                hour_24 = 12 if hour_12 == 12 else hour_12 + 12
-            
-            time_value = f"{hour_24:02d}:{minute:02d}"
-        except Exception:
-            time_value = "03:00"
-    
-    day_of_week = request.form.get("day_of_week", "mon")
-    raw_dom = request.form.get("day_of_month", "1")
-    # Sanitize day-of-month (1..31)
-    try:
-        day_of_month = int(raw_dom)
-    except Exception:
-        day_of_month = 1
-    day_of_month = max(1, min(31, day_of_month))
-
-    schedule_enabled = "schedule_enabled" in request.form
-    prune_containers = "prune_containers" in request.form
-    prune_images = "prune_images" in request.form
-    prune_networks = "prune_networks" in request.form
-    prune_volumes = "prune_volumes" in request.form
-    prune_build_cache = "prune_build_cache" in request.form
-
-    provider = request.form.get("notifications_provider", "gotify")
-    gotify_enabled = "gotify_enabled" in request.form
-    gotify_url = (request.form.get("gotify_url") or "").strip()
-    gotify_token = (request.form.get("gotify_token") or "").strip()
-    ntfy_enabled = "ntfy_enabled" in request.form
-    ntfy_url = (request.form.get("ntfy_url") or "").strip()
-    ntfy_topic = (request.form.get("ntfy_topic") or "").strip()
-    ntfy_token = (request.form.get("ntfy_token") or "").strip()
-    discord_enabled = "discord_enabled" in request.form
-    discord_webhook_url = (request.form.get("discord_webhook_url") or "").strip()
-    telegram_enabled = "telegram_enabled" in request.form
-    telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
-    telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
-    # Parse notification priority (low/medium/high, default 'medium')
-    notification_priority = request.form.get("notification_priority", "medium").strip().lower()
-    if notification_priority not in ["low", "medium", "high"]:
-        notification_priority = "medium"
-    only_on_changes = "notifications_only_on_changes" in request.form
-
-    # Auto-enable selected provider if fields are filled but toggle was forgotten
-    if provider == "gotify" and not gotify_enabled and gotify_url and gotify_token:
-        gotify_enabled = True
-    if provider == "ntfy" and not ntfy_enabled and ntfy_url and ntfy_topic:
-        ntfy_enabled = True
-    if provider == "discord" and not discord_enabled and discord_webhook_url:
-        discord_enabled = True
-    if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
-        telegram_enabled = True
-
-    time_value = validate_time(time_value)
-
-    new_values = {
-        "schedule_enabled": schedule_enabled,
-        "frequency": frequency,
-        "time": time_value,
-        "day_of_week": day_of_week,
-        "day_of_month": day_of_month,
-        "prune_containers": prune_containers,
-        "prune_images": prune_images,
-        "prune_networks": prune_networks,
-        "prune_volumes": prune_volumes,
-        "prune_build_cache": prune_build_cache,
-        "notifications": {
-            "provider": provider,
-            "gotify": {"enabled": gotify_enabled, "url": gotify_url, "token": gotify_token},
-            "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
-            "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
-            "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
-            "priority": notification_priority,
-            "only_on_changes": only_on_changes,
-        },
-    }
-
-    schedule_keys = [
-        "schedule_enabled","frequency","time","day_of_week","day_of_month",
-        "prune_containers","prune_images","prune_networks","prune_volumes","prune_build_cache"
-    ]
-    schedule_changed = any(new_values[k] != old_config.get(k) for k in schedule_keys)
-    config.update(new_values)
-    if schedule_changed:
-        # Clear last-run key so the next scheduled window can fire
-        _clear_last_run_key()
-
-    save_config()
-    flash("Configuration updated.", "success")
-    return redirect(url_for("index"))
+    errors = _save_form_config()
+    if errors:
+        return _respond(False, " ".join(errors), 400)
+    return _respond(True, "Configuration saved.", **_schedule_payload())
 
 
-@app.route("/run-now", methods=["POST"])
-def run_now():
-    """Trigger an immediate manual prune job."""
-    # Reload config to use the latest prune settings
-    load_config(silent=True)
-    log("Manual run trigger received.")
-    ran = run_prune_job(origin="manual", wait=True)
-    flash("Prune job executed manually." if ran else "Prune job skipped (busy or timeout).", "info")
-    return redirect(url_for("index"))
+PRUNE_KEYS = ("prune_containers", "prune_images", "prune_networks", "prune_volumes", "prune_build_cache")
+
+
+def _apply_prune_selection(data: dict, context: str) -> None:
+    """Persist the prune toggles sent by the UI (atomic w.r.t. other config writers)."""
+    with config_lock:
+        load_config(silent=True)
+        if any(k in data for k in PRUNE_KEYS):
+            for key in PRUNE_KEYS:
+                config[key] = bool(data.get(key, False))
+            save_config()
+            log(f"{context} with updated prune settings saved.")
 
 
 @app.route("/preview-prune", methods=["POST"])
 def preview_prune():
     """Get a preview of what would be pruned without executing."""
-    load_config(silent=True)
-    
-    # Save current prune settings from request body (if provided)
-    try:
-        data = request.get_json() or {}
-        if any(k in data for k in ["prune_containers", "prune_images", "prune_networks", "prune_volumes", "prune_build_cache"]):
-            config["prune_containers"] = data.get("prune_containers", False)
-            config["prune_images"] = data.get("prune_images", False)
-            config["prune_networks"] = data.get("prune_networks", False)
-            config["prune_volumes"] = data.get("prune_volumes", False)
-            config["prune_build_cache"] = data.get("prune_build_cache", False)
-            save_config()
-            log("Preview requested with updated prune settings saved.")
-    except Exception as e:
-        log(f"Error parsing preview request body: {e}")
-    
+    _apply_prune_selection(request.get_json(silent=True) or {}, "Preview requested")
     log("Prune preview requested.")
-    preview = get_prune_preview()
-    return jsonify(preview)
+    return jsonify(get_prune_preview())
 
 
 @app.route("/run-confirmed", methods=["POST"])
 def run_confirmed():
     """Execute prune after user has seen and confirmed the preview."""
-    load_config(silent=True)
-    
-    # Ensure latest prune settings are saved (should be saved by preview, but double-check)
-    try:
-        data = request.get_json() or {}
-        if any(k in data for k in ["prune_containers", "prune_images", "prune_networks", "prune_volumes", "prune_build_cache"]):
-            config["prune_containers"] = data.get("prune_containers", False)
-            config["prune_images"] = data.get("prune_images", False)
-            config["prune_networks"] = data.get("prune_networks", False)
-            config["prune_volumes"] = data.get("prune_volumes", False)
-            config["prune_build_cache"] = data.get("prune_build_cache", False)
-            save_config()
-            log("Confirmed run with updated prune settings saved.")
-    except Exception as e:
-        log(f"Error parsing confirmed run request body: {e}")
-    
+    data = request.get_json(silent=True) or {}
+    _apply_prune_selection(data, "Confirmed run")
+
+    # Volume pruning deletes named volumes (databases!): a manual run only touches volumes
+    # when the user typed DELETE in the preview. Otherwise volumes are skipped for this run.
+    allow_volumes = str(data.get("confirm_volumes") or "") == "DELETE"
+    if config.get("prune_volumes") and not allow_volumes:
+        if not any(config.get(k) for k in PRUNE_KEYS if k != "prune_volumes"):
+            return jsonify({"success": False, "message": "Volume pruning requires typing DELETE to confirm."}), 400
+        log("Volumes are enabled but not confirmed; this manual run skips volumes.")
+
     log("Confirmed manual run trigger received.")
-    ran = run_prune_job(origin="manual", wait=True)
+    record = run_prune_job(origin="manual", wait=True, allow_volumes=allow_volumes)
     return jsonify({
-        "success": ran,
-        "message": "Prune job executed successfully." if ran else "Prune job skipped (busy or timeout)."
+        "success": bool(record),
+        "message": "Prune job executed successfully." if record else "Prune job skipped (busy, nothing selected or timeout).",
+        "run": record or None,
     })
 
 
 @app.route("/test-notification", methods=["POST"])
 def test_notification():
     """Save configuration and send a test notification."""
-    # First save the config with the current form data, then test notification
-    load_config(silent=True)
-    old_config = json.loads(json.dumps(config))
+    errors = _save_form_config()
+    if errors:
+        return _respond(False, " ".join(errors), 400)
 
-    frequency = request.form.get("frequency", "daily")
-    
-    # Handle both 24h and 12h time formats
-    if use_24h_format:
-        time_value = request.form.get("time", "03:00")
-    else:
-        # Convert 12h format (hour, minute, period) to 24h format
-        try:
-            hour_12 = int(request.form.get("time_hour", "3"))
-            minute = int(request.form.get("time_minute", "0"))
-            period = request.form.get("time_period", "AM")
-            
-            # Validate ranges
-            hour_12 = max(1, min(12, hour_12))
-            minute = max(0, min(59, minute))
-            
-            # Convert to 24h
-            if period == "AM":
-                hour_24 = 0 if hour_12 == 12 else hour_12
-            else:  # PM
-                hour_24 = 12 if hour_12 == 12 else hour_12 + 12
-            
-            time_value = f"{hour_24:02d}:{minute:02d}"
-        except Exception:
-            time_value = "03:00"
-    
-    day_of_week = request.form.get("day_of_week", "mon")
-    raw_dom = request.form.get("day_of_month", "1")
-    try:
-        day_of_month = int(raw_dom)
-    except Exception:
-        day_of_month = 1
-    day_of_month = max(1, min(31, day_of_month))
-
-    prune_containers = "prune_containers" in request.form
-    prune_images = "prune_images" in request.form
-    prune_networks = "prune_networks" in request.form
-    prune_volumes = "prune_volumes" in request.form
-    prune_build_cache = "prune_build_cache" in request.form
-
-    provider = request.form.get("notifications_provider", "gotify")
-    gotify_enabled = "gotify_enabled" in request.form
-    gotify_url = (request.form.get("gotify_url") or "").strip()
-    gotify_token = (request.form.get("gotify_token") or "").strip()
-    ntfy_enabled = "ntfy_enabled" in request.form
-    ntfy_url = (request.form.get("ntfy_url") or "").strip()
-    ntfy_topic = (request.form.get("ntfy_topic") or "").strip()
-    ntfy_token = (request.form.get("ntfy_token") or "").strip()
-    discord_enabled = "discord_enabled" in request.form
-    discord_webhook_url = (request.form.get("discord_webhook_url") or "").strip()
-    telegram_enabled = "telegram_enabled" in request.form
-    telegram_bot_token = (request.form.get("telegram_bot_token") or "").strip()
-    telegram_chat_id = (request.form.get("telegram_chat_id") or "").strip()
-    # Parse notification priority (low/medium/high, default 'medium')
-    notification_priority = request.form.get("notification_priority", "medium").strip().lower()
-    if notification_priority not in ["low", "medium", "high"]:
-        notification_priority = "medium"
-    only_on_changes = "notifications_only_on_changes" in request.form
-
-    # Auto-enable selected provider if fields are filled but toggle was forgotten
-    if provider == "gotify" and not gotify_enabled and gotify_url and gotify_token:
-        gotify_enabled = True
-    if provider == "ntfy" and not ntfy_enabled and ntfy_url and ntfy_topic:
-        ntfy_enabled = True
-    if provider == "discord" and not discord_enabled and discord_webhook_url:
-        discord_enabled = True
-    if provider == "telegram" and not telegram_enabled and telegram_bot_token and telegram_chat_id:
-        telegram_enabled = True
-
-    time_value = validate_time(time_value)
-
-    new_values = {
-        "frequency": frequency,
-        "time": time_value,
-        "day_of_week": day_of_week,
-        "day_of_month": day_of_month,
-        "prune_containers": prune_containers,
-        "prune_images": prune_images,
-        "prune_networks": prune_networks,
-        "prune_volumes": prune_volumes,
-        "prune_build_cache": prune_build_cache,
-        "notifications": {
-            "provider": provider,
-            "gotify": {"enabled": gotify_enabled, "url": gotify_url, "token": gotify_token},
-            "ntfy": {"enabled": ntfy_enabled, "url": ntfy_url, "topic": ntfy_topic, "token": ntfy_token},
-            "discord": {"enabled": discord_enabled, "webhook_url": discord_webhook_url},
-            "telegram": {"enabled": telegram_enabled, "bot_token": telegram_bot_token, "chat_id": telegram_chat_id},
-            "priority": notification_priority,
-            "only_on_changes": only_on_changes,
-        },
-    }
-
-    schedule_keys = [
-        "frequency","time","day_of_week","day_of_month",
-        "prune_containers","prune_images","prune_networks","prune_volumes","prune_build_cache"
-    ]
-    schedule_changed = any(new_values[k] != old_config.get(k) for k in schedule_keys)
-    config.update(new_values)
-    if schedule_changed:
-        _clear_last_run_key()
-
-    save_config()
-    
-    # Test the notification with the saved config
     log("Notification test requested from UI.")
-    # Use configured priority for test notification
     test_priority = config.get("notifications", {}).get("priority", "medium")
     ok = send_notification(
         "PruneMate test notification",
         "This is a test message from PruneMate.\n\nIf you see this, your current provider settings are working.",
         priority=test_priority,
     )
-    flash("Configuration saved. " + ("Test notification sent." if ok else "Test notification failed (check settings & logs)."), "info")
-    return redirect(url_for("index"))
+    return _respond(
+        ok,
+        "Configuration saved. " + ("Test notification sent." if ok else "Test notification failed (check settings & logs)."),
+        200,
+        **_schedule_payload(),
+    )
 
 
 @app.route("/stats")
@@ -1923,7 +2418,7 @@ def stats():
 def api_stats():
     """Return formatted statistics for Homepage dashboard widget."""
     stats = load_stats()
-    
+
     # Calculate relative time for last run
     last_run_text = "Never"
     last_run_timestamp = None
@@ -1931,13 +2426,13 @@ def api_stats():
         try:
             last_run_dt = datetime.datetime.fromisoformat(stats["last_run"])
             now = datetime.datetime.now(app_timezone)
-            
+
             # Convert both to timezone-aware if needed
             if last_run_dt.tzinfo is None:
                 last_run_dt = last_run_dt.replace(tzinfo=app_timezone)
-            
+
             delta = now - last_run_dt
-            
+
             # Format relative time
             if delta.days > 0:
                 last_run_text = f"{delta.days}d ago"
@@ -1949,7 +2444,7 @@ def api_stats():
                 last_run_text = f"{minutes}m ago"
             else:
                 last_run_text = "Just now"
-            
+
             # Provide timestamp in seconds for format: relativeTime
             last_run_timestamp = int(last_run_dt.timestamp())
         except (ValueError, TypeError, OSError) as e:
@@ -1958,7 +2453,7 @@ def api_stats():
         except Exception as e:
             log(f"Unexpected error in /api/stats timestamp calculation: {e}")
             last_run_text = "Unknown"
-    
+
     return jsonify({
         "pruneRuns": stats.get("prune_runs", 0),
         "containersDeleted": stats.get("containers_deleted", 0),
@@ -1975,19 +2470,109 @@ def api_stats():
     })
 
 
+@app.route("/api/dashboard")
+def api_dashboard():
+    """Everything the UI dashboard needs in one call (requires normal auth)."""
+    load_config(silent=True)
+    return jsonify({
+        "stats": load_stats(),
+        "history": load_history()[-30:],
+        "now": datetime.datetime.now(app_timezone).isoformat(timespec="seconds"),
+        **_schedule_payload(),
+    })
+
+
+_LOG_REDACTIONS = [
+    # 'bot_token': '...' / "webhook_url": "..." in logged config dicts
+    (re.compile(r"""(['"](?:\w*token|webhook_url|password|secret|api_key)['"]\s*:\s*['"])[^'"]+(['"])""", re.IGNORECASE),
+     r"\1***\2"),
+    # Discord webhook URLs anywhere in a line (e.g. V1.x error messages)
+    (re.compile(r"(https://(?:ptb\.|canary\.)?discord(?:app)?\.com/api/webhooks/)\S+", re.IGNORECASE), r"\1***"),
+    # Telegram bot tokens (api.telegram.org/bot<id>:<secret>)
+    (re.compile(r"\bbot(\d+):[A-Za-z0-9_-]{20,}"), r"bot\1:***"),
+    # user:password@host in URLs
+    (re.compile(r"(\b[a-z][a-z0-9+.-]*://[^/\s:@]+:)[^@\s/]+@", re.IGNORECASE), r"\1***@"),
+]
+
+
+def redact_log_line(line: str) -> str:
+    """Mask secrets in a log line (also for lines written by older PruneMate versions)."""
+    for pattern, replacement in _LOG_REDACTIONS:
+        line = pattern.sub(replacement, line)
+    return line
+
+
+def _tail_file(path: Path, lines: int, max_bytes: int = 1024 * 1024) -> list:
+    """Return the last `lines` lines of a file without reading it completely."""
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        size = f.tell()
+        f.seek(max(0, size - max_bytes))
+        data = f.read().decode("utf-8", errors="replace")
+    result = data.splitlines()
+    if size > max_bytes and result:
+        result = result[1:]  # first line is probably partial
+    return result[-lines:]
+
+
+@app.route("/api/logs")
+def api_logs():
+    """Return the last lines of the PruneMate log (secrets redacted)."""
+    try:
+        lines = max(50, min(2000, int(request.args.get("lines", 300))))
+    except (TypeError, ValueError):
+        lines = 300
+    if not LOG_FILE.exists():
+        return jsonify({"lines": [], "message": f"No log file found at {LOG_FILE}"})
+    try:
+        tail = [redact_log_line(line) for line in _tail_file(LOG_FILE, lines)]
+        return jsonify({"lines": tail})
+    except Exception as e:
+        log(f"Error reading log file: {e}")
+        return jsonify({"lines": [], "message": "Could not read log file"}), 500
+
+
+# ---- Docker hosts ----
+def _public_host(host: dict) -> dict:
+    return {
+        "name": host.get("name", ""),
+        "url": host.get("url", ""),
+        "enabled": bool(host.get("enabled", True)),
+        "tls": host.get("tls", "") or "",
+    }
+
+
+def _host_from_form() -> tuple[dict | None, str | None]:
+    """Validate host fields from a form submission. Returns (host, error)."""
+    name = (request.form.get("name") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    tls_name = (request.form.get("tls") or "").strip()
+    enabled = request.form.get("enabled", "on") == "on"
+
+    if not name or not url:
+        return None, "Host name and URL are required."
+    if len(name) > 64:
+        return None, "Host name is too long (max 64 characters)."
+    if name.lower() == "local":
+        return None, "The name 'Local' is reserved for the local Docker host."
+    if len(url) > 512 or not url.startswith(("tcp://", "http://", "https://")):
+        return None, "URL must start with tcp://, http://, or https://"
+    try:
+        if not urllib.parse.urlparse(url).hostname:
+            return None, "URL must contain a host name or IP address."
+    except ValueError:
+        return None, "URL is not valid."
+    if not _valid_tls_name(tls_name):
+        return None, "TLS folder may only contain letters, digits, '.', '_' and '-'."
+    return {"name": name, "url": url, "enabled": enabled, "tls": tls_name}, None
+
+
 @app.route("/hosts")
 def list_hosts():
-    """Return list of Docker hosts as JSON (includes Local socket for display)."""
+    """Return list of Docker hosts as JSON (includes Local for display)."""
     load_config(silent=True)
-    external_hosts = config.get("docker_hosts", [])
-    
-    # Include Local host at the beginning for consistency with run_prune_job()
-    # Frontend will filter it out for display, but it provides accurate count
-    all_hosts = [
-        {"name": "Local", "url": "unix:///var/run/docker.sock", "enabled": True}
-    ] + external_hosts
-    
-    return jsonify({"hosts": all_hosts})
+    external_hosts = [_public_host(h) for h in config.get("docker_hosts", [])]
+    return jsonify({"hosts": [_public_host(local_host_entry())] + external_hosts})
 
 
 @app.route("/hosts/status")
@@ -1997,7 +2582,7 @@ def get_host_status():
     configured_hosts = config.get("docker_hosts", [])
     external_hosts = [
         (index, host) for index, host in enumerate(configured_hosts)
-        if host.get("name") != "Local" and "unix://" not in host.get("url", "")
+        if not _is_local_entry(host)
     ]
 
     def check_host(index, host):
@@ -2008,7 +2593,7 @@ def get_host_status():
         if not host_url.startswith(("tcp://", "http://", "https://")):
             return {"index": index, "status": "offline"}
 
-        client = create_docker_client(host_url)
+        client = create_docker_client(host_url, host.get("tls", ""))
         if client is None:
             return {"index": index, "status": "offline"}
 
@@ -2031,113 +2616,74 @@ def get_host_status():
 
 
 @app.route("/hosts/add", methods=["POST"])
+@with_config_lock
 def add_host():
     """Add a new Docker host."""
     load_config(silent=True)
-    
-    name = (request.form.get("name") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    enabled = request.form.get("enabled") == "on"
-    
-    if not name or not url:
-        flash("Host name and URL are required.", "warn")
-        return redirect(url_for("index"))
-    
-    # Validate URL format
-    valid_protocols = ["tcp://", "http://", "https://"]
-    if not any(url.startswith(proto) for proto in valid_protocols):
-        flash("URL must start with tcp://, http://, or https://", "warn")
-        return redirect(url_for("index"))
-    
-    new_host = {
-        "name": name,
-        "url": url,
-        "enabled": enabled
-    }
-    
-    if "docker_hosts" not in config:
-        config["docker_hosts"] = []
-    
-    config["docker_hosts"].append(new_host)
-    save_config()
-    
-    flash(f"Docker host '{name}' added successfully.", "info")
-    return redirect(url_for("index"))
+    new_host, error = _host_from_form()
+    if error:
+        return _respond(False, error, 400)
+
+    config.setdefault("docker_hosts", []).append(new_host)
+    if not save_config():
+        return _respond(False, SAVE_FAILED_MESSAGE, 500)
+    return _respond(True, f"Docker host '{new_host['name']}' added.")
 
 
 @app.route("/hosts/<int:index>/update", methods=["POST"])
+@with_config_lock
 def update_host(index):
     """Update an existing Docker host."""
     load_config(silent=True)
-    
     hosts = config.get("docker_hosts", [])
     if index < 0 or index >= len(hosts):
-        flash("Invalid host index.", "warn")
-        return redirect(url_for("index"))
-    
-    name = (request.form.get("name") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    enabled = request.form.get("enabled") == "on"
-    
-    if not name or not url:
-        flash("Host name and URL are required.", "warn")
-        return redirect(url_for("index"))
-    
-    # Validate URL format
-    valid_protocols = ["tcp://", "http://", "https://"]
-    if not any(url.startswith(proto) for proto in valid_protocols):
-        flash("URL must start with tcp://, http://, or https://", "warn")
-        return redirect(url_for("index"))
-    
-    hosts[index] = {
-        "name": name,
-        "url": url,
-        "enabled": enabled
-    }
-    
+        return _respond(False, "Invalid host index.", 400)
+
+    updated, error = _host_from_form()
+    if error:
+        return _respond(False, error, 400)
+
+    hosts[index] = updated
     config["docker_hosts"] = hosts
-    save_config()
-    
-    flash(f"Docker host '{name}' updated successfully.", "info")
-    return redirect(url_for("index"))
+    if not save_config():
+        return _respond(False, SAVE_FAILED_MESSAGE, 500)
+    return _respond(True, f"Docker host '{updated['name']}' updated.")
 
 
 @app.route("/hosts/<int:index>/delete", methods=["POST"])
+@with_config_lock
 def delete_host(index):
     """Delete a Docker host."""
     load_config(silent=True)
-    
     hosts = config.get("docker_hosts", [])
     if index < 0 or index >= len(hosts):
-        flash("Invalid host index.", "warn")
-        return redirect(url_for("index"))
-    
+        return _respond(False, "Invalid host index.", 400)
+
     # Note: It's safe to delete all external hosts - Local is always available at runtime
     deleted_name = hosts[index].get("name", "Unknown")
     del hosts[index]
-    
     config["docker_hosts"] = hosts
-    save_config()
-    
-    flash(f"Docker host '{deleted_name}' deleted successfully.", "info")
-    return redirect(url_for("index"))
+    if not save_config():
+        return _respond(False, SAVE_FAILED_MESSAGE, 500)
+    return _respond(True, f"Docker host '{deleted_name}' deleted.")
 
 
 @app.route("/hosts/<int:index>/toggle", methods=["POST"])
+@with_config_lock
 def toggle_host(index):
     """Toggle enabled/disabled status of a Docker host."""
     load_config(silent=True)
-    
     hosts = config.get("docker_hosts", [])
     if index < 0 or index >= len(hosts):
-        return jsonify({"success": False, "error": "Invalid host index"}), 400
-    
+        return jsonify({"success": False, "message": "Invalid host index"}), 400
+
     hosts[index]["enabled"] = not hosts[index].get("enabled", True)
     config["docker_hosts"] = hosts
-    save_config()
-    
+    if not save_config():
+        return jsonify({"success": False, "message": SAVE_FAILED_MESSAGE}), 500
+
     status = "enabled" if hosts[index]["enabled"] else "disabled"
-    return jsonify({"success": True, "enabled": hosts[index]["enabled"], "message": f"Host {status}"})
+    return jsonify({"success": True, "enabled": hosts[index]["enabled"], "message": f"Host '{hosts[index].get('name')}' {status}."})
 
 
 class StandaloneApplication(BaseApplication):
@@ -2162,17 +2708,29 @@ class StandaloneApplication(BaseApplication):
 
 if __name__ == "__main__":
     load_config()
+    # Upgrading from V1.x: rebuild the run history from existing log files (one-time)
+    import_history_from_logs()
     scheduler.add_job(heartbeat, CronTrigger(second=0), id="heartbeat", max_instances=1, coalesce=True)
     log("Scheduler heartbeat job started (every minute at :00).")
-    
+    log(f"PruneMate v{APP_VERSION} - local Docker endpoint: {LOCAL_DOCKER_URL}")
+    if not config_dir_writable():
+        log("ERROR: " + CONFIG_WRITE_HELP)
+    if not is_auth_enabled():
+        log("WARNING: Authentication is disabled. Anyone who can reach this port can change settings and run prunes. "
+            "Set PRUNEMATE_AUTH_PASSWORD_HASH to enable login.")
+    if not os.environ.get("PRUNEMATE_API_KEY"):
+        log("Note: /stats and /api/stats are public. Set PRUNEMATE_API_KEY to require a key (X-API-Key header).")
+
     options = {
         "bind": "0.0.0.0:8080",
         "workers": 1,
-        "threads": 2,
+        "threads": 4,
         "timeout": 120,
         # Disable access logs (172.x request lines)
         "accesslog": None,
         "errorlog": "-",
         "loglevel": "info",
+        # Gunicorn >= 25.1 opens a runtime control socket by default; not needed (and fails on read-only FS)
+        "control_socket_disable": True,
     }
     StandaloneApplication(app, options).run()

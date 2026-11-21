@@ -2,199 +2,38 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Login - PruneMate</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700&display=swap" rel="stylesheet">
-  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='prunemate-icon.svg') }}"/>
-  <style>
-    /* Reused theme colors and design tokens */
-    :root{
-      --bg-900: #020617;
-      --bg-800: #0b1120;
-      --accent: #0ea5e9;
-      --accent-strong: #22c55e;
-      --muted: #9ca3af;
-      --text: #e6eef6;
-      --card-border: rgba(148,163,184,0.06);
-      --glass-border: rgba(148,163,184,0.12);
-      --focus: 0 6px 24px rgba(14,165,233,0.12);
-      --shadow-strong: 0 32px 70px rgba(0,0,0,0.75);
-      --radius-lg: 18px;
-    }
-
-    *{box-sizing:border-box}
-    html,body{height:100%}
-    
-    body {
-      margin:0;
-      font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-      color:var(--text);
-      background:
-        radial-gradient(600px 300px at 50% 10%, rgba(14,165,233,0.10), transparent 40%),
-        linear-gradient(135deg, var(--bg-900), var(--bg-800));
-      background-attachment: fixed;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:16px;
-    }
-
-    .login-container{
-      width:100%;
-      max-width:400px;
-      background: linear-gradient(180deg, rgba(18,25,44,0.95), rgba(8,12,22,0.95));
-      border-radius:24px;
-      padding:32px 24px;
-      position:relative;
-      box-shadow: var(--shadow-strong), 0 10px 35px rgba(2,6,23,0.6);
-      border:1px solid var(--glass-border);
-      backdrop-filter: blur(8px) saturate(1.05);
-      text-align: center;
-    }
-
-    .login-container::before{
-      content:"";
-      position:absolute;
-      inset:0;
-      pointer-events:none;
-      border-radius:inherit;
-      background: linear-gradient(180deg, rgba(255,255,255,0.03), transparent 40%);
-      mix-blend-mode:overlay;
-    }
-
-    .logo-wrap{
-      width:80px;
-      height:80px;
-      margin: 0 auto 16px auto;
-      border-radius:16px;
-    }
-    .logo-wrap img{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-      display:block;
-    }
-
-    h1 {
-      font-family: "Montserrat", sans-serif;
-      font-size: 1.5rem;
-      margin: 0 0 8px 0;
-      color: var(--text);
-    }
-    
-    .subtitle {
-      color: var(--muted);
-      font-size: 0.9rem;
-      margin-bottom: 24px;
-    }
-
-    .field {
-      margin-bottom: 16px;
-      text-align: left;
-    }
-    
-    label {
-      font-size: 0.85rem;
-      color: var(--muted);
-      margin-left: 8px;
-      margin-bottom: 6px;
-      display: block;
-      font-weight: 600;
-    }
-
-    input[type="text"], input[type="password"] {
-      width: 100%;
-      padding: 10px 16px;
-      border-radius: 9999px;
-      border: 1px solid rgba(255,255,255,0.06);
-      background: rgba(2,6,23,0.6);
-      color: var(--text);
-      font-size: 1rem;
-      outline: none;
-      transition: all 0.2s ease;
-      font-family: inherit;
-    }
-
-    input:focus {
-      box-shadow: var(--focus);
-      border-color: rgba(14,165,233,0.6);
-    }
-
-    .btn {
-      width: 100%;
-      margin-top: 8px;
-      padding: 10px;
-      border-radius: 9999px;
-      border: none;
-      font-weight: 700;
-      font-size: 1rem;
-      cursor: pointer;
-      background: linear-gradient(90deg,#0ea5e9,#0284c7);
-      color: white;
-      box-shadow: 0 4px 14px rgba(14,165,233,0.25);
-      transition: transform 0.1s ease, box-shadow 0.1s ease;
-      font-family: inherit;
-    }
-
-    .btn:hover {
-      transform: translateY(-2px);
-      box-shadow: 0 8px 24px rgba(14,165,233,0.35);
-    }
-    
-    .btn:active {
-      transform: translateY(0);
-    }
-
-    .flash {
-      background: rgba(239, 68, 68, 0.1);
-      border: 1px solid rgba(239, 68, 68, 0.2);
-      color: #fca5a5;
-      padding: 10px;
-      border-radius: 12px;
-      font-size: 0.9rem;
-      margin-bottom: 20px;
-      text-align: center;
-    }
-    
-    .footer {
-      margin-top: 24px;
-      font-size: 0.75rem;
-      color: #64748b;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="dark" />
+  <title>Sign in - PruneMate</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='prunemate-icon.svg') }}" />
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}?v={{ app_version }}" />
 </head>
-<body>
-  <div class="login-container">
-    <div class="logo-wrap">
-      <img src="{{ url_for('static', filename='prunemate.png') }}" alt="PruneMate">
-    </div>
+<body class="login-page">
+  <main class="login-card">
+    <img class="logo" src="{{ url_for('static', filename='prunemate.png') }}" alt="PruneMate" />
     <h1>Sign in to PruneMate</h1>
     <p class="subtitle">Authentication required to continue</p>
 
     {% with messages = get_flashed_messages() %}
       {% if messages %}
-        <div class="flash">
-          {{ messages[0] }}
-        </div>
+        <div class="flash" role="alert">{{ messages[-1] }}</div>
       {% endif %}
     {% endwith %}
 
     <form method="post">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" />
       <div class="field">
         <label for="username">Username</label>
-        <input type="text" id="username" name="username" placeholder="admin" autocomplete="username" required autofocus>
+        <input type="text" id="username" name="username" placeholder="admin" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
       </div>
-
       <div class="field">
         <label for="password">Password</label>
         <input type="password" id="password" name="password" placeholder="••••••••" autocomplete="current-password" required>
       </div>
-
-      <button type="submit" class="btn">Sign In</button>
+      <button type="submit" class="btn">Sign in</button>
     </form>
-    
-    <div class="footer">
-    </div>
-  </div>
+
+    <div class="footer">PruneMate v{{ app_version }}</div>
+  </main>
 </body>
 </html>
