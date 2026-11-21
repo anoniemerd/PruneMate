@@ -60,31 +60,63 @@ Built with Python (Flask) · Docker SDK · APScheduler · Gunicorn. Runs on amd6
 
 ---
 
+
 ## 📷 Examples
 
 ### Dashboard
-The main page: next run, last result, run history and all settings.
+
+The main page: next run, last result, run history, and all settings.
 
 <p align="center">
-  <img width="1353" height="1941" alt="afbeelding" src="https://github.com/user-attachments/assets/3ebcdded-5f3f-4dd7-90dd-7642e6a2ec65" />
+  <img
+    src="https://github.com/user-attachments/assets/3ebcdded-5f3f-4dd7-90dd-7642e6a2ec65"
+    alt="Dashboard"
+    width="800"
+  />
 </p>
 
--->
-
 <details>
-<summary>More screenshots: login, Docker hosts, notifications</summary>
+<summary>More screenshots: login, Docker hosts, notifications, and logs</summary>
 
-**Login page**
-<p align="center"><img width="638" alt="Login page" src="https://github.com/user-attachments/assets/4bcfd33f-dee8-4d8a-8f40-5f6c5689b971" /></p>
+### Login page
 
-**External Docker hosts**
-<p align="center"><img width="1194" alt="Docker hosts" src="https://github.com/user-attachments/assets/5a2ea525-fa8d-4b45-8b2d-80ef39a0dfc9" /></p>
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/4f4f8737-6706-4e94-ad87-ad65f97056ba"
+    alt="Login page"
+    width="500"
+  />
+</p>
 
-**Notification settings**
-<p align="center"><img width="1194" alt="Notification settings" src="https://github.com/user-attachments/assets/f30d9063-01ca-4916-8c2c-7d0cecd6ab33" /></p>
+### External Docker hosts
 
-**LOGS menu**
-<p align="center"><img width="1498" height="1323" alt="afbeelding" src="https://github.com/user-attachments/assets/9561896f-c3cf-4deb-97a7-a5ce5712652f" /></p>
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/72a2ab59-05ba-40ab-81cd-e5699c775577"
+    alt="External Docker hosts"
+    width="800"
+  />
+</p>
+
+### Notification settings
+
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/e5c6b53d-bf0f-46e8-8ef7-a5450d4566ce"
+    alt="Notification settings"
+    width="800"
+  />
+</p>
+
+### Logs menu
+
+<p align="center">
+  <img
+    src="https://github.com/user-attachments/assets/9561896f-c3cf-4deb-97a7-a5ce5712652f"
+    alt="Logs menu"
+    width="800"
+  />
+</p>
 
 </details>
 
