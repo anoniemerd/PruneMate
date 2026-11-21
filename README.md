@@ -66,17 +66,9 @@ Built with Python (Flask) · Docker SDK · APScheduler · Gunicorn. Runs on amd6
 The main page: next run, last result, run history and all settings.
 
 <p align="center">
-  <img width="1246" alt="PruneMate dashboard" src="https://github.com/user-attachments/assets/8afaf51c-0414-4bf1-8851-24f5bfded94a" />
+  <img width="1353" height="1941" alt="afbeelding" src="https://github.com/user-attachments/assets/3ebcdded-5f3f-4dd7-90dd-7642e6a2ec65" />
 </p>
 
-### Logs
-Read what PruneMate is doing right in the web UI: filter lines, choose how many to show and hide the heartbeats.
-Passwords and tokens are masked.
-
-<!-- TODO: add the Logs screenshot
-<p align="center">
-  <img width="1246" alt="PruneMate log viewer" src="SCREENSHOT_URL" />
-</p>
 -->
 
 <details>
@@ -90,6 +82,9 @@ Passwords and tokens are masked.
 
 **Notification settings**
 <p align="center"><img width="1194" alt="Notification settings" src="https://github.com/user-attachments/assets/f30d9063-01ca-4916-8c2c-7d0cecd6ab33" /></p>
+
+**LOGS menu**
+<p align="center"><img width="1498" height="1323" alt="afbeelding" src="https://github.com/user-attachments/assets/9561896f-c3cf-4deb-97a7-a5ce5712652f" /></p>
 
 </details>
 
